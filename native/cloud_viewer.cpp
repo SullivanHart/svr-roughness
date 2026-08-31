@@ -1901,7 +1901,11 @@ void samplePointsFromMesh(pcl::PointCloud<pcl::PointXYZRGBA>::Ptr& inputptr, Pol
 			int ctr = 0;
 			for (int i = 0; i < tree.number_of_intersected_primitives(segment_query); i++) {
 				Segment_intersection intersection = *intersection2;
-				const Point* p = std::get_if<Point>(&intersection->first); // Use std::get_if for safety
+#if defined(CGAL_VERSION_NR) && CGAL_VERSION_NR >= 1060000000
+				const Point* p = std::get_if<Point>(&intersection->first);
+#else
+				const Point* p = boost::get<Point>(&intersection->first);
+#endif
 				if (p) {
 					sum = p->z();
 					ctr++;
