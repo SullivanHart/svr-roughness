@@ -7,6 +7,7 @@
 #include <CGAL/IO/Polyhedron_iostream.h>
 #include <CGAL/IO/OFF.h>
 
+#include <CGAL/version.h>
 #include <CGAL/Point_set_3.h>
 #include <CGAL/Simple_cartesian.h>
 #include <CGAL/Exact_predicates_inexact_constructions_kernel.h>
@@ -58,10 +59,18 @@ typedef CGAL::Implicit_surface_3<Kernel, Poisson_reconstruction_function> Surfac
 
 // AABB_tree typedefs
 typedef CGAL::AABB_face_graph_triangle_primitive<Polyhedron, CGAL::Default, CGAL::Tag_false> Primitive;
+#if defined(CGAL_VERSION_NR) && CGAL_VERSION_NR >= 1060000000
 typedef CGAL::AABB_traits_3<Kernel, Primitive> Traits;
+#else
+typedef CGAL::AABB_traits<Kernel, Primitive> Traits;
+#endif
 typedef CGAL::AABB_tree<Traits> Tree;
 typedef CGAL::AABB_face_graph_triangle_primitive<Polyhedron> AABBPrimitive;
+#if defined(CGAL_VERSION_NR) && CGAL_VERSION_NR >= 1060000000
 typedef CGAL::AABB_traits_3<Kernel, AABBPrimitive> AABBTraits;
+#else
+typedef CGAL::AABB_traits<Kernel, AABBPrimitive> AABBTraits;
+#endif
 typedef CGAL::AABB_tree<AABBTraits> AABB_tree;
 
 typedef CGAL::Surface_mesh_shortest_path_traits<Kernel, Polyhedron> Traits2;
