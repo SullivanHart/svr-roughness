@@ -22,7 +22,11 @@
 #include <CGAL/IO/Polyhedron_iostream.h>
 #include <CGAL/IO/OFF.h>
 #include <CGAL/AABB_tree.h>
+#if __has_include(<CGAL/AABB_traits_3.h>)
 #include <CGAL/AABB_traits_3.h>
+#else
+#include <CGAL/AABB_traits.h>
+#endif
 #include <CGAL/AABB_halfedge_graph_segment_primitive.h>
 #include <CGAL/AABB_face_graph_triangle_primitive.h>
 #include <CGAL/Surface_mesh_shortest_path/Surface_mesh_shortest_path.h>
