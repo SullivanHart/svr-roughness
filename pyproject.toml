@@ -4,7 +4,7 @@ build-backend = "scikit_build_core.build"
 
 [project]
 name = "svr-roughness"
-version = "0.4.13"
+version = "0.4.14"
 description = "Surface roughness metrics from scanner point clouds"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -33,6 +33,7 @@ svr-roughness = "svr_roughness.__main__:main"
 cmake.version = ">=3.20"
 cmake.source-dir = "native"
 wheel.packages = ["src/svr_roughness"]
+wheel.py-api = "py3"
 sdist.include = [
   "native/CMakeLists.txt",
   "native/*.cpp",

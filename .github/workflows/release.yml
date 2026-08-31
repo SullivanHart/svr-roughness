@@ -39,7 +39,7 @@ jobs:
       - name: Build wheel and sdist
         run: |
           python -m build
-          auditwheel repair dist/*.whl -w dist/
+          auditwheel repair dist/*.whl --plat manylinux_2_28_x86_64 -w dist/
           rm dist/*-linux_x86_64.whl
 
       - name: Publish to PyPI
