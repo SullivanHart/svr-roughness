@@ -2,8 +2,11 @@ name: Build and Publish Linux & Windows Wheels
 
 on:
   push:
-    tags:
-      - 'v*'
+    branches:
+      - main
+    paths:
+      - 'pyproject.toml'
+      - 'src/svr_roughness/__init__.py'
   workflow_dispatch:
 
 jobs:
