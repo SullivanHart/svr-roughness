@@ -34,7 +34,7 @@ jobs:
       - name: Install build tools
         run: |
           python -m pip install --upgrade pip
-          pip install build auditwheel scikit-build-core
+          pip install build auditwheel patchelf scikit-build-core
 
       - name: Build wheel and sdist
         run: |
