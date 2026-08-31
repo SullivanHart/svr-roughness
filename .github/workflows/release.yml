@@ -21,10 +21,10 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install Linux C++ Dependencies (PCL, CGAL, Boost, TBB, Eigen)
+      - name: Install Linux C++ Dependencies (PCL, CGAL, Boost, TBB, Eigen, patchelf)
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake build-essential libpcl-dev libcgal-dev libboost-system-dev libboost-filesystem-dev libtbb-dev libeigen3-dev
+          sudo apt-get install -y cmake build-essential libpcl-dev libcgal-dev libboost-system-dev libboost-filesystem-dev libtbb-dev libeigen3-dev patchelf
 
       - name: Set up Python
         uses: actions/setup-python@v5
