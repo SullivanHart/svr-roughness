@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-import cv2
 import numpy as np
 import numpy.typing as npt
-from scipy.ndimage import distance_transform_edt, gaussian_filter
+from scipy.ndimage import convolve, distance_transform_edt, gaussian_filter
 
 from .config import RoughnessConfig
 from .result import BoolArray, FloatArray, PlaneFit
@@ -92,8 +91,8 @@ def fill_holes_neighbor_mean(grid: FloatArray, valid: BoolArray, max_passes: int
         valid_float = valid_mask.astype(np.float64)
         values_zeroed = np.nan_to_num(filled, nan=0.0)
 
-        neighbor_sums = cv2.filter2D(values_zeroed, -1, kernel, borderType=cv2.BORDER_CONSTANT)
-        neighbor_counts = cv2.filter2D(valid_float, -1, kernel, borderType=cv2.BORDER_CONSTANT)
+        neighbor_sums = convolve(values_zeroed, kernel, mode="constant", cval=0.0)
+        neighbor_counts = convolve(valid_float, kernel, mode="constant", cval=0.0)
 
         fillable = missing & (neighbor_counts > 0)
         if not np.any(fillable):
