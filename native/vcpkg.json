@@ -1,0 +1,10 @@
+{
+  "name": "svr-roughness-native",
+  "version-string": "0.4.0",
+  "dependencies": [
+    "cgal",
+    "eigen3",
+    "pcl",
+    "tbb"
+  ]
+}

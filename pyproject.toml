@@ -1,0 +1,50 @@
+[build-system]
+requires = ["scikit-build-core>=0.10"]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "svr-roughness"
+version = "0.4.6"
+description = "Surface roughness metrics from scanner point clouds"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [
+  { name = "Sullivan Hart" },
+  { name = "HAM Lab, Iowa State University" }
+]
+dependencies = [
+  "numpy>=1.24",
+  "scipy>=1.10"
+]
+keywords = ["roughness", "point-cloud", "ply", "surface-metrology"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Science/Research",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Topic :: Scientific/Engineering"
+]
+
+[project.scripts]
+svr-roughness = "svr_roughness.__main__:main"
+
+[tool.scikit-build]
+cmake.version = ">=3.20"
+cmake.source-dir = "native"
+wheel.packages = ["src/svr_roughness"]
+sdist.include = [
+  "native/CMakeLists.txt",
+  "native/*.cpp",
+  "native/*.h",
+  "native/vcpkg.json",
+  "src/svr_roughness/**",
+  "tests/**",
+  "README.md"
+]
+sdist.exclude = [
+  "native/build/**",
+  "native/vcpkg_installed/**",
+  "**/.pytest_cache/**",
+  "**/__pycache__/**"
+]

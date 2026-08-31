@@ -1,0 +1,80 @@
+# Byte-compiled / optimized / C-extension files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.pyd
+*.dll
+*.dylib
+
+# C / C++ build outputs and vcpkg dependencies
+native/build/
+native/vcpkg_installed/
+vcpkg_installed/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+compile_commands.json
+*.o
+*.obj
+*.lo
+*.la
+*.a
+*.lib
+*.exp
+*.pdb
+*.ilk
+
+# Native shared libraries compiled into Python package
+src/svr_roughness/native/*.dll
+src/svr_roughness/native/*.so
+src/svr_roughness/native/*.dylib
+src/svr_roughness/native/*.lib
+src/svr_roughness/native/*.exp
+
+# Python distribution, wheel, and scikit-build artifacts
+build/
+_skbuild/
+dist/
+*.egg-info/
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+.agents/
+.claude/
+.codex/
+
+# Unit test, linting, and coverage reports
+.tox/
+.coverage
+.coverage.*
+htmlcov/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local environment variables and secrets
+.env
+.env.local
+.env.*
+
+# IDEs, MSVC Visual Studio, and OS metadata
+.vscode/
+.idea/
+.vs/
+*.sln
+*.vcxproj
+*.vcxproj.filters
+*.vcxproj.user
+*.suo
+*.user
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
