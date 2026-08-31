@@ -12,7 +12,7 @@ on:
 jobs:
   build_linux_wheel:
     name: Build Linux Wheel & Sdist
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
 
     permissions:
       id-token: write
@@ -39,7 +39,7 @@ jobs:
       - name: Build wheel and sdist
         run: |
           python -m build
-          auditwheel repair dist/*.whl --plat manylinux_2_28_x86_64 -w dist/
+          auditwheel repair dist/*.whl -w dist/
           rm dist/*-linux_x86_64.whl
 
       - name: Publish to PyPI

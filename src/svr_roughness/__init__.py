@@ -1,6 +1,6 @@
 """Surface roughness analysis for scanner point clouds."""
 
-__version__ = "0.4.14"
+__version__ = "0.4.15"
 
 
 from .analyze import (
