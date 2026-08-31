@@ -4,20 +4,15 @@ from dataclasses import fields, replace
 from pathlib import Path
 from typing import Any, Callable
 
+import numpy as np
 import numpy.typing as npt
 
-import numpy as np
-
-from ._algorithm import (
+from ._display_grid import (
     apply_filters,
     crop_points,
     fill_holes_neighbor_mean,
     fit_plane_basis,
     grid_residuals,
-    sa_sq,
-    statistical_filter,
-    svr_grid,
-    voxel_downsample,
 )
 from .config import RoughnessConfig, coerce_range
 from .io import load_ascii_ply, load_points
@@ -31,10 +26,10 @@ def analyze_points(
     progress: Callable[[str, float], None] | None = None,
     **overrides: Any,
 ) -> RoughnessResult:
-    """Analyze an Nx3 XYZ point array.
+    """Analyze an Nx3 XYZ point array using the native SurfInspect C++ core.
 
-    This is the canonical roughness path. File-specific APIs only load data and
-    then delegate here, so the math is identical for every supported source type.
+    This is the canonical roughness path. File-specific APIs load data and
+    then delegate here to execute the native C++ numerical engine.
     """
 
     resolved = _resolve_config(config, overrides)
@@ -62,7 +57,7 @@ def analyze_points(
     if len(selected) < 20:
         raise ValueError("SurfInspect native core requires at least 20 valid points")
 
-    # Always execute the native C++ core for official metrology (Sa, Sq, Svr)
+    # Strictly execute the native C++ core extracted from Cloud-Viewer
     native = analyze_native(selected, resolved)
     sa_um = native[0]
     sq_um = native[1]
@@ -72,11 +67,10 @@ def analyze_points(
     variogram_counts = native[6]
     surface_distances_mm = native[7]
 
-    # Compute 2D grid representation for heatmap/Plotly visualization
+    # Compute 2D grid matrix for visualization heatmaps
     plane = fit_plane_basis(selected)
     cropped, _ = crop_points(plane.coords, resolved)
-    display_points = statistical_filter(cropped, resolved.statistical_mean_k, resolved.statistical_stddev) if resolved.statistical_filter else cropped
-    grid_raw, valid_raw, grid_origin = grid_residuals(display_points, resolved.grid_mm, resolved.min_points_per_cell)
+    grid_raw, valid_raw, grid_origin = grid_residuals(cropped, resolved.grid_mm, resolved.min_points_per_cell)
     grid_filled, valid_filled = fill_holes_neighbor_mean(grid_raw, valid_raw, resolved.max_hole_passes)
     grid_filtered = apply_filters(grid_filled, valid_filled, resolved.grid_mm, resolved.short_cutoff_mm, resolved.long_cutoff_mm)
     grid_filtered = grid_filtered - np.nanmean(grid_filtered[valid_filled])

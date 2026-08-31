@@ -1,6 +1,6 @@
 """Surface roughness analysis for scanner point clouds."""
 
-__version__ = "0.4.1"
+__version__ = "0.4.8"
 
 from .analyze import (
     analyze_file,
@@ -12,7 +12,8 @@ from .analyze import (
 from .config import RoughnessConfig
 from .io import load_ascii_ply, load_delimited, load_obj, load_pcd, load_ply, load_points, load_stl_vertices
 from .result import PlaneFit, RoughnessGrid, RoughnessResult, format_report
-from ._algorithm import svr_map
+
+from ._display_grid import svr_map
 
 __all__ = [
     "PlaneFit",
