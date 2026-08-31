@@ -34,6 +34,8 @@ jobs:
           pip install build twine scikit-build-core
 
       - name: Build wheel and sdist
+        env:
+          SKBUILD_WHEEL_TAG: manylinux_2_34_x86_64
         run: |
           python -m build
 
