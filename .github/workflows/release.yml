@@ -21,9 +21,21 @@ jobs:
           - os: ubuntu-24.04-arm
             arch: aarch64
 
+    env:
+      CMAKE_C_COMPILER_LAUNCHER: ccache
+      CMAKE_CXX_COMPILER_LAUNCHER: ccache
+      CCACHE_BASEDIR: ${{ github.workspace }}
+      CCACHE_SLOPPINESS: time_macros,include_file_mtime,file_stat_matches
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Cache apt packages
+        uses: actions/cache@v4
+        with:
+          path: /var/cache/apt/archives
+          key: ${{ runner.os }}-${{ matrix.arch }}-apt-v1
 
       - name: Install Linux C++ Dependencies (PCL, CGAL, Boost, TBB, Eigen, patchelf)
         run: |
@@ -40,6 +52,7 @@ jobs:
         uses: hendrikmuhs/ccache-action@v1.2
         with:
           key: ${{ runner.os }}-${{ matrix.arch }}-ccache
+          max-size: 500M
 
       - name: Install build tools
         run: |
@@ -62,6 +75,8 @@ jobs:
     name: Build Windows Wheel (x86_64)
     runs-on: windows-2022
     env:
+      CMAKE_TOOLCHAIN_FILE: 'C:/vcpkg/scripts/buildsystems/vcpkg.cmake'
+      VCPKG_TARGET_TRIPLET: 'x64-windows'
       VCPKG_BINARY_SOURCES: 'clear;x-gha,readwrite'
 
     steps:

@@ -31,7 +31,7 @@ if(EXISTS "${PACKAGE_VCPKG_PREFIX}")
 endif()
 
 find_package(PCL REQUIRED)
-find_package(Boost REQUIRED COMPONENTS system filesystem)
+find_package(Boost REQUIRED COMPONENTS filesystem)
 find_package(Eigen3 REQUIRED)
 find_package(CGAL REQUIRED)
 find_package(TBB REQUIRED)
@@ -55,7 +55,6 @@ target_link_directories(SurfInspectNative PRIVATE ${PCL_LIBRARY_DIRS})
 target_compile_definitions(SurfInspectNative PRIVATE ${PCL_DEFINITIONS})
 target_link_libraries(SurfInspectNative PRIVATE
     ${PCL_LIBRARIES}
-    Boost::system
     Boost::filesystem
     CGAL::CGAL
 )
