@@ -115,6 +115,11 @@ def apply_filters(
     if not np.any(valid_mask):
         return output
 
+    # Replace NaNs before gaussian_filter so NaNs do not propagate into valid surface data
+    nan_mask = np.isnan(output)
+    if np.any(nan_mask):
+        output[nan_mask] = 0.0
+
     if short_cutoff_mm > 0:
         sigma_short = (short_cutoff_mm / grid_mm) / (2.0 * np.pi)
         if sigma_short > 0:
@@ -127,6 +132,7 @@ def apply_filters(
             form = gaussian_filter(output, sigma=sigma_long, mode="nearest")
             output = output - form
 
+    output[~valid_mask] = np.nan
     return output
 
 
