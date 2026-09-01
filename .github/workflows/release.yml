@@ -77,22 +77,27 @@ jobs:
     runs-on: windows-2022
     env:
       CMAKE_TOOLCHAIN_FILE: 'C:/vcpkg/scripts/buildsystems/vcpkg.cmake'
-      VCPKG_TARGET_TRIPLET: 'x64-windows'
-      VCPKG_BUILD_TYPE: 'release'
+      VCPKG_TARGET_TRIPLET: 'x64-windows-release'
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Cache vcpkg installed dependencies
+        id: cache-vcpkg
         uses: actions/cache@v4
         with:
           path: |
             C:/vcpkg/installed
             C:/Users/runneradmin/AppData/Local/vcpkg/archives
-          key: ${{ runner.os }}-vcpkg-${{ hashFiles('native/vcpkg.json') }}
+          key: ${{ runner.os }}-vcpkg-release-v3-${{ hashFiles('native/vcpkg.json') }}
           restore-keys: |
-            ${{ runner.os }}-vcpkg-
+            ${{ runner.os }}-vcpkg-release-v3-
+
+      - name: Pre-install vcpkg dependencies (Release triplet only)
+        if: steps.cache-vcpkg.outputs.cache-hit != 'true'
+        run: |
+          vcpkg install --dir native --triplet x64-windows-release
 
       - name: Set up Python
         uses: actions/setup-python@v5
