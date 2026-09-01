@@ -97,7 +97,7 @@ jobs:
       - name: Pre-install vcpkg dependencies (Release triplet only)
         if: steps.cache-vcpkg.outputs.cache-hit != 'true'
         run: |
-          vcpkg install --dir native --triplet x64-windows-release
+          vcpkg install --manifest-root=native --triplet x64-windows-release
 
       - name: Set up Python
         uses: actions/setup-python@v5
