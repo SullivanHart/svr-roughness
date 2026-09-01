@@ -16,7 +16,6 @@
 #include <pcl/segmentation/extract_clusters.h>
 #include <pcl/io/pcd_io.h>
 #include <pcl/io/ply_io.h>
-#include <pcl/io/vtk_lib_io.h>
 #include <pcl/point_types.h>
 #include <pcl/common/common_headers.h>
 #include <pcl/features/integral_image_normal.h>
