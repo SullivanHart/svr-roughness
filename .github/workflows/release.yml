@@ -1,4 +1,4 @@
-name: Build and Publish Linux & Windows Wheels
+name: Build and Publish Multi-Platform Wheels
 
 on:
   push:
@@ -55,12 +55,83 @@ jobs:
       - name: Upload dist artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: dist-${{ matrix.arch }}
+          name: dist-linux-${{ matrix.arch }}
           path: dist/
+
+  build_windows_wheel:
+    name: Build Windows Wheel (x86_64)
+    runs-on: windows-2022
+    env:
+      VCPKG_BINARY_SOURCES: 'clear;x-gha,readwrite'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: 'pip'
+
+      - name: Export GitHub Actions Cache Provider for vcpkg
+        uses: actions/github-script@v7
+        with:
+          script: |
+            core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
+            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
+
+      - name: Install build tools
+        run: |
+          python -m pip install --upgrade pip
+          pip install build scikit-build-core
+
+      - name: Build Windows Wheel
+        run: |
+          python -m build --wheel
+
+      - name: Upload dist artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-windows
+          path: dist/*.whl
+
+  build_macos_wheel:
+    name: Build macOS Wheel (ARM64 Apple Silicon)
+    runs-on: macos-14
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install macOS C++ Dependencies via Homebrew
+        run: |
+          brew install cmake cgal pcl boost tbb eigen
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: 'pip'
+
+      - name: Install build tools
+        run: |
+          python -m pip install --upgrade pip
+          pip install build scikit-build-core
+
+      - name: Build macOS Wheel
+        run: |
+          python -m build --wheel
+
+      - name: Upload dist artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-macos
+          path: dist/*.whl
 
   publish_pypi:
     name: Publish to PyPI
-    needs: build_linux_wheels
+    needs: [build_linux_wheels, build_windows_wheel, build_macos_wheel]
     runs-on: ubuntu-latest
     permissions:
       id-token: write
