@@ -4,7 +4,7 @@ build-backend = "scikit_build_core.build"
 
 [project]
 name = "svr-roughness"
-version = "0.4.31"
+version = "0.4.32"
 description = "Surface roughness metrics from scanner point clouds"
 readme = "README.md"
 requires-python = ">=3.10"

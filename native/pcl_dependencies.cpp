@@ -1,13 +1,15 @@
 #include "pcl_dependencies.h"
 
+#include <iostream>
 #include <string>
 #include <Eigen/Dense>
 
 using namespace Eigen;
+using namespace std;
 
 //Remove statistical outlier. Can remove noise but could also delete important points.
 void StatOutlierRemoval(pcl::PointCloud<pcl::PointXYZRGBA>::Ptr cloud) {
-	cout << "StatOutlierRemoval Start cloud: " << cloud->size() << endl;
+	std::cout << "StatOutlierRemoval Start cloud: " << cloud->size() << std::endl;
 	pcl::StatisticalOutlierRemoval<pcl::PointXYZRGBA> sor;
 	sor.setInputCloud(cloud);
 	sor.setMeanK(6);

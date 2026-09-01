@@ -32,7 +32,7 @@ endif()
 
 add_compile_definitions(CGAL_SILENCE_DEPRECATION_WARNINGS)
 if(APPLE)
-    add_compile_options("-Wno-warning-directive" "-Wno-cpp" "-Wno-deprecated-declarations")
+    add_compile_options("-Wno-unknown-directives" "-Wno-cpp" "-Wno-deprecated-declarations")
 endif()
 
 find_package(PCL REQUIRED)
