@@ -1664,6 +1664,7 @@ bool LoadInputFromFile(std::string& fileEnding, std::string& filename, pcl::Poin
 		std::cout << "Loaded point cloud " << filename << std::endl << std::endl;
 	}
 	else if (fileEnding.compare(".stl") == 0) {
+#if __has_include(<pcl/io/vtk_lib_io.h>) || __has_include(<pcl/io/vtk_io.h>)
 		pcl::io::loadPolygonFileSTL(filename, *inputMesh);
 		pcl::PCLPointCloud2 pc2;
 		pc2 = inputMesh->cloud;
@@ -1671,6 +1672,9 @@ bool LoadInputFromFile(std::string& fileEnding, std::string& filename, pcl::Poin
 		std::cout << "Loaded stl " << filename << std::endl << std::endl;
 		stlInput = true;
 		cout << "loading   stlInput: " << stlInput << endl;
+#else
+		std::cerr << "STL loading requires PCL VTK IO support" << std::endl;
+#endif
 	}
 	cout << "LoadInputFromFile end " << endl;
 	return stlInput;
