@@ -16,7 +16,7 @@ class RoughnessConfig:
     Default values match the canonical SurfInspect/PC_svr2 Settings.csv.
     """
 
-    grid_mm: float = 0.30
+    grid_mm: float = 0.20
     x_range: Range | None = None
     y_range: Range | None = None
     z_range: Range | None = None
@@ -26,7 +26,7 @@ class RoughnessConfig:
     long_cutoff_mm: float = 25.0
     short_cutoff_mm: float = 1.0
     svr_points: int = 10
-    svr_span_mm: float = 0.5
+    svr_span_mm: float = 0.3
     mesh_resolution_mm: float = 1.0
     mesh_smoothing_mm: float = 0.0
     max_svr_points: int = 0
