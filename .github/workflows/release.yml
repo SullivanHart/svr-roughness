@@ -21,9 +21,6 @@ jobs:
           - os: ubuntu-24.04-arm
             arch: aarch64
 
-    permissions:
-      id-token: write
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -54,6 +51,27 @@ jobs:
           python -m build
           auditwheel repair dist/*.whl -w dist/
           rm -f dist/*-linux_x86_64.whl dist/*-linux_aarch64.whl
+
+      - name: Upload dist artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.arch }}
+          path: dist/
+
+  publish_pypi:
+    name: Publish to PyPI
+    needs: build_linux_wheels
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+
+    steps:
+      - name: Download all dist artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: dist-*
+          path: dist
+          merge-multiple: true
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
