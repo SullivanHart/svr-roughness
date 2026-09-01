@@ -53,6 +53,7 @@ jobs:
         with:
           key: ${{ runner.os }}-${{ matrix.arch }}-ccache
           max-size: 500M
+          save-always: true
 
       - name: Install build tools
         run: |
@@ -128,6 +129,13 @@ jobs:
         with:
           python-version: '3.13'
           cache: 'pip'
+
+      - name: Setup ccache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: ${{ runner.os }}-arm64-ccache
+          max-size: 500M
+          save-always: true
 
       - name: Install build tools
         run: |
