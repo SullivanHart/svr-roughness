@@ -30,6 +30,11 @@ if(EXISTS "${PACKAGE_VCPKG_PREFIX}")
     list(PREPEND CMAKE_PREFIX_PATH "${PACKAGE_VCPKG_PREFIX}")
 endif()
 
+add_compile_definitions(CGAL_SILENCE_DEPRECATION_WARNINGS)
+if(APPLE)
+    add_compile_options(-Wno-\#warnings -Wno-deprecated-declarations -Wno-cpp)
+endif()
+
 find_package(PCL REQUIRED)
 find_package(Boost REQUIRED COMPONENTS filesystem)
 find_package(Eigen3 REQUIRED)
