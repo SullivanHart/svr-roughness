@@ -10,9 +10,16 @@ on:
   workflow_dispatch:
 
 jobs:
-  build_linux_wheel:
-    name: Build Linux Wheel & Sdist
-    runs-on: ubuntu-22.04
+  build_linux_wheels:
+    name: Build Linux Wheel (${{ matrix.arch }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            arch: x86_64
+          - os: ubuntu-24.04-arm
+            arch: aarch64
 
     permissions:
       id-token: write
@@ -35,7 +42,7 @@ jobs:
       - name: Setup ccache
         uses: hendrikmuhs/ccache-action@v1.2
         with:
-          key: ${{ runner.os }}-ccache
+          key: ${{ runner.os }}-${{ matrix.arch }}-ccache
 
       - name: Install build tools
         run: |
@@ -46,7 +53,7 @@ jobs:
         run: |
           python -m build
           auditwheel repair dist/*.whl -w dist/
-          rm dist/*-linux_x86_64.whl
+          rm -f dist/*-linux_x86_64.whl dist/*-linux_aarch64.whl
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
