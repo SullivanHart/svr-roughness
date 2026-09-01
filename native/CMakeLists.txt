@@ -62,6 +62,7 @@ target_link_libraries(SurfInspectNative PRIVATE
     ${PCL_LIBRARIES}
     Boost::filesystem
     CGAL::CGAL
+    TBB::tbb
 )
 
 install(TARGETS SurfInspectNative
