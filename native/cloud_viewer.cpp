@@ -589,7 +589,19 @@ Polyhedron remesh(Polyhedron& mesh2, int loopCounter, double target_edge_length,
 	mesh2.clear();
 	unsigned int nb_iter = 10;
 	std::vector<edge_descriptor> border;
+#if defined(__clang__)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+#elif defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+#endif
 	CGAL::Polygon_mesh_processing::border_halfedges(faces(mesh), mesh, boost::make_function_output_iterator(halfedge2edge(mesh, border)));
+#if defined(__clang__)
+#pragma clang diagnostic pop
+#elif defined(__GNUC__)
+#pragma GCC diagnostic pop
+#endif
 	CGAL::Polygon_mesh_processing::split_long_edges(border, target_edge_length, mesh);
 	std::cout << "remesh    Start remeshing of " << "advancing_front.off" << " (" << num_faces(mesh) << " faces)..." << std::endl;
 	CGAL::Polygon_mesh_processing::isotropic_remeshing(faces(mesh), target_edge_length, mesh, CGAL::Polygon_mesh_processing::parameters::number_of_iterations(nb_iter)
