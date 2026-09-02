@@ -98,8 +98,6 @@ jobs:
         if: steps.cache-vcpkg.outputs.cache-hit != 'true'
         run: |
           cd native
-          vcpkg install --triplet x64-windows-release
-
       - name: Set up Python
         uses: actions/setup-python@v5
         with:

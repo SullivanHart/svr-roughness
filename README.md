@@ -5,8 +5,7 @@ extracted from Cloud-Viewer. Use `svr_roughness` as the consistent Python
 import name.
 
 The core API is file-type agnostic: roughness is computed from an `Nx3` NumPy-like XYZ point array in millimeters. Svr is calculated from signed distances to a smoothed, triangulated reference surface and a KD-tree variogram modeled on SurfInspect. The regular grid remains available for visualization. The native reference
-mesh downsampling defaults to 1.0 mm, matching Cloud-Viewer's
-`cell_size_grid_simplify_point_set` default. SurfInspect-compatible statistical
+mesh downsampling defaults to 1.0 mm. SurfInspect-compatible statistical
 outlier filtering is enabled by default (`mean_k=6`, standard-deviation
 multiplier `3.0`), and the native variogram uses every processed point.
 
