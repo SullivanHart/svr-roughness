@@ -39,6 +39,12 @@ struct si_result {
     std::size_t* variogram_counts;
     std::size_t distance_count;
     double* signed_distances_mm;
+    std::size_t grid_width;
+    std::size_t grid_height;
+    double grid_origin_x_mm;
+    double grid_origin_y_mm;
+    double* grid_z_mm;
+    double* grid_svr_um;
 };
 
 SURFINSPECT_NATIVE_API int si_analyze_points(

@@ -41,6 +41,22 @@ class RoughnessConfig:
         """Return a config matching the canonical SurfInspect/PC_svr2 defaults."""
         return cls()
 
+    @classmethod
+    def astm_standard_defaults(cls) -> "RoughnessConfig":
+        """Return a config strictly enforcing the ASTM WK92969 standard parameters.
+        
+        Note: Appendices X1.3, X2.3, and X3.3 of the draft standard contain a known
+        unit-conversion typo for cutoffs (0.001 mm and 0.025 mm). The values used
+        here match the intended 1 mm and 25 mm specified in Section 9.1.
+        """
+        return cls(
+            grid_mm=0.20,
+            short_cutoff_mm=1.0,
+            long_cutoff_mm=25.0,
+            svr_span_mm=0.5,
+            svr_points=10,
+        )
+
 
 def parse_range(text: str | None) -> Range | None:
     if text is None:

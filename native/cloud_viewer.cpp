@@ -232,6 +232,16 @@ void GridFilter(const pcl::PointCloud<pcl::PointXYZRGBA>::Ptr& inputptr, double 
 	std::cerr << "GridFilter end Cloud: " << inputptr->size() << std::endl;
 }
 
+template <typename T>
+struct PrimitiveFaceExtractor {
+	static Polyhedron::Face_handle get(const T& id) { return id; }
+};
+
+template <typename F, typename G>
+struct PrimitiveFaceExtractor<std::pair<F, G>> {
+	static Polyhedron::Face_handle get(const std::pair<F, G>& id) { return id.first; }
+};
+
 //Disatance calculation between surface and points. Using a tree as infut for efficient calculation
 void  ParallelDistance(std::vector<double>& output, PointList input, pcl::PointCloud<pcl::PointXYZRGBA>::Ptr pointsOnSurface, Tree* inputTree,
 	size_t n/*, CGAL::Side_of_triangle_mesh<Polyhedron, Kernel> inside*/) {
@@ -242,7 +252,7 @@ void  ParallelDistance(std::vector<double>& output, PointList input, pcl::PointC
 	parallel_for(size_t(0), n, [&](size_t i) {
 		output[i] = sqrt(inputTree->squared_distance(input[i].first));
 		Point_and_primitive_id pp = inputTree->closest_point_and_primitive(input[i].first);
-		Polyhedron::Face_handle f = pp.second.first; // closest primitive id
+		Polyhedron::Face_handle f = PrimitiveFaceExtractor<decltype(pp.second)>::get(pp.second); // closest primitive id
 		CGAL::Vector_3<Kernel> v1 = input[i].first - pp.first;
 		double angle = std::acos((v1 * input[i].second / CGAL::sqrt(v1 * v1) / CGAL::sqrt(input[i].second * input[i].second))) * (180 / 3.14159265358979323846);
 		// handeling points on the border
@@ -997,7 +1007,6 @@ void applyGaussianFilterToCloud(pcl::PointCloud<pcl::PointXYZRGBA>::Ptr& inputpt
 	int maxX = inputptr->width;
 	int maxY = inputptr->height;
 	pcl::PointCloud<pcl::PointXYZRGBA>::Ptr organizedCloud(new pcl::PointCloud<pcl::PointXYZRGBA>());
-	pcl::PointCloud<pcl::PointXYZRGBA>::Ptr organizedCloud2(new pcl::PointCloud<pcl::PointXYZRGBA>());
 	int max = (KernelSize - 1) / 2;
 	int KernelSize2 = (KernelSize - 1) / 2;
 	int min = -max;
@@ -1011,75 +1020,96 @@ void applyGaussianFilterToCloud(pcl::PointCloud<pcl::PointXYZRGBA>::Ptr& inputpt
 	}
 	organizedCloud->is_dense = false;
 	organizedCloud->points.resize(organizedCloud->height * organizedCloud->width);
-	pcl::copyPointCloud(*organizedCloud, *organizedCloud2);
 	if (cropCloud == false) {
 		max = 0;
 	}
 	size_t size = maxX - max;
-	cout << "applyFilterCloud parallel for start" << endl;
+	cout << "applyFilterCloud parallel for start (separable 1D)" << endl;
+
+	// Extract normalized 1D kernel along center axis (Gaussian filter is strictly separable)
+	std::vector<double> kernel1D(KernelSize);
+	double sum1D = 0.0;
+	for (int k = 0; k < KernelSize; ++k) {
+		kernel1D[k] = GKernel(k, KernelSize2);
+		sum1D += kernel1D[k];
+	}
+	if (sum1D > 0.0) {
+		for (int k = 0; k < KernelSize; ++k) {
+			kernel1D[k] /= sum1D;
+		}
+	}
+
+	// Pass 1: Horizontal (X-direction) 1D convolution on input Z
+	std::vector<float> tempZ(maxX * maxY, 0.0f);
+	parallel_for(size_t(0), size_t(maxY), [&](size_t j) {
+		for (int i = 0; i < maxX; ++i) {
+			if (i >= KernelSize2 && i < maxX - KernelSize2) {
+				// Fast interior path: sum of normalized weights is exactly 1.0, no bounds checks
+				double wx = 0.0;
+				for (int x = 0; x < KernelSize; ++x) {
+					int ii = i - (KernelSize2 - x);
+					wx += kernel1D[x] * inputptr->at(ii, j).z;
+				}
+				tempZ[j * maxX + i] = static_cast<float>(wx);
+			} else {
+				// Edge path: normalized with partial kernel
+				double wx = 0.0;
+				double sum_x = 0.0;
+				int minXGrid = (cropCloud == false && i < KernelSize2) ? (KernelSize2 - i) : 0;
+				int maxXGrid = (cropCloud == false && abs(i - (maxX - 1)) < KernelSize2)
+					? (KernelSize - (KernelSize2 - abs(i - (maxX - 1))))
+					: KernelSize;
+				for (int x = minXGrid; x < maxXGrid; ++x) {
+					int ii = i - (KernelSize2 - x);
+					wx += kernel1D[x] * inputptr->at(ii, j).z;
+					sum_x += kernel1D[x];
+				}
+				tempZ[j * maxX + i] = (sum_x > 0.0) ? static_cast<float>(wx / sum_x) : inputptr->at(i, j).z;
+			}
+		}
+	});
+
+	// Pass 2: Vertical (Y-direction) 1D convolution on tempZ
 	parallel_for(size_t(0), size, [&](size_t ii) {
-		//for (int i = max; i < maxX - max; ++i) {
 		int i = ii + max;
 		for (int j = max; j < maxY - max; ++j) {
-			double sum = 0;
-			double w = 0.0;
-			int ctr = 0;
-			int minXGrid = 0;
-			int minYGrid = 0;
-			int maxXGrid = KernelSize;
-			int maxYGrid = KernelSize;
-			if (cropCloud == false) {
-				sum = 0;
-				if (i < KernelSize2) {
-					minXGrid = abs(i - KernelSize2);
-				}
-				if (j < KernelSize2) {
-					minYGrid = abs(j - KernelSize2);
-				}
-				if (abs(i - (maxX - 1)) < KernelSize2) {
-					int distToEdge = abs(i - (maxX - 1));
-					maxXGrid = (KernelSize - (KernelSize2 - distToEdge));
-				}
-				if (abs(j - (maxY - 1)) < KernelSize2) {
-					int distToEdge = abs(j - (maxY - 1));
-					maxYGrid = (KernelSize - (KernelSize2 - distToEdge));
-				}
-			}
-			for (int x = minXGrid; x <= maxXGrid - 1; x++) {
-				for (int y = minYGrid; y <= maxYGrid - 1; y++) {
-					int ii = i - (KernelSize2 - x);
+			float w;
+			if (j >= KernelSize2 && j < maxY - KernelSize2) {
+				// Fast interior path: sum of normalized weights is 1.0, no bounds checks
+				double wy = 0.0;
+				for (int y = 0; y < KernelSize; ++y) {
 					int jj = j - (KernelSize2 - y);
-					if (cropCloud == false) {
-						w += GKernel(x, y) * inputptr->at(ii, jj).z;
-						sum = sum + GKernel(x, y);
-					}
-					else {
-						w += GKernel(x, y) * inputptr->at(ii, jj).z;
-					}
+					wy += kernel1D[y] * tempZ[jj * maxX + i];
 				}
+				w = static_cast<float>(wy);
+			} else {
+				// Edge path: normalized with partial kernel
+				double wy = 0.0;
+				double sum_y = 0.0;
+				int minYGrid = (cropCloud == false && j < KernelSize2) ? (KernelSize2 - j) : 0;
+				int maxYGrid = (cropCloud == false && abs(j - (maxY - 1)) < KernelSize2)
+					? (KernelSize - (KernelSize2 - abs(j - (maxY - 1))))
+					: KernelSize;
+				for (int y = minYGrid; y < maxYGrid; ++y) {
+					int jj = j - (KernelSize2 - y);
+					wy += kernel1D[y] * tempZ[jj * maxX + i];
+					sum_y += kernel1D[y];
+				}
+				w = (sum_y > 0.0) ? static_cast<float>(wy / sum_y) : tempZ[j * maxX + i];
 			}
-			if (cropCloud == false && isinf(w / sum)) {
-				cout << "applyFilterCloud  FINAL: w: " << w << " sum: " << sum << " ctr: " << ctr << endl;
-			}
-			if (cropCloud == false) {
-				w = w / sum;
-			}
+
 			organizedCloud->at(i - max, j - max).x = inputptr->at(i, j).x;
 			organizedCloud->at(i - max, j - max).y = inputptr->at(i, j).y;
 			if (HighPass) {
 				organizedCloud->at(i - max, j - max).z = inputptr->at(i, j).z - w;
-				organizedCloud2->at(i - max, j - max).x = inputptr->at(i, j).x;
-				organizedCloud2->at(i - max, j - max).y = inputptr->at(i, j).y;
-				organizedCloud2->at(i - max, j - max).z = w;
 			}
 			else {
 				organizedCloud->at(i - max, j - max).z = w;
 			}
 		}
-		//	}
-		});
+	});
 	cout << "applyFilterCloud parallel for end" << endl;
-	pcl::copyPointCloud(*organizedCloud, *inputptr);
+	inputptr->swap(*organizedCloud);
 	cout << "applyFilterCloud end" << endl;
 }
 
@@ -1684,27 +1714,20 @@ void CenterPointCloudAndAdjustUnits(pcl::PointCloud<pcl::PointXYZRGBA>::Ptr& clo
 {
 	cout << "CenterPointCloudAndAdjustUnits start " << endl;
 	pcl::computeCentroid(*cloud, outCentroid2);
-	Eigen::Affine3f transform2 = Eigen::Affine3f::Identity();
-	transform2.translation() << -outCentroid2.x, -outCentroid2.y, -outCentroid2.z;
-	pcl::transformPointCloud(*cloud, *cloud, transform2);
-	//Some of the parameters set are assuming a certain length unit. This converts mm to m. 
-	if (UnitMM == true) {
-		for (size_t i = 0; i < cloud->size(); ++i)
-		{
-			cloud->points[i].x *= 0.001;
-			cloud->points[i].y *= 0.001;
-			cloud->points[i].z *= 0.001;
-		}
+	const float cx = outCentroid2.x;
+	const float cy = outCentroid2.y;
+	const float cz = outCentroid2.z;
+	const float scale = UnitMM ? 0.001f : (UnitInch ? 0.0254f : 1.0f);
+
+	for (size_t i = 0; i < cloud->size(); ++i) {
+		auto& p = cloud->points[i];
+		p.x = (p.x - cx) * scale;
+		p.y = (p.y - cy) * scale;
+		p.z = (p.z - cz) * scale;
 	}
-	else if (UnitInch == true) {
-		for (size_t i = 0; i < cloud->size(); ++i)
-		{
-			cloud->points[i].x *= 0.0254;
-			cloud->points[i].y *= 0.0254;
-			cloud->points[i].z *= 0.0254;
-		}
-	}
-	pcl::computeCentroid(*cloud, outCentroid2);
+	outCentroid2.x = 0.0f;
+	outCentroid2.y = 0.0f;
+	outCentroid2.z = 0.0f;
 	cout << "CenterPointCloudAndAdjustUnits end " << endl;
 }
 
@@ -1767,7 +1790,7 @@ void VoxelGridDownsample(std::shared_ptr<pcl::PointCloud<pcl::PointXYZRGBA>>& cl
 	pcl::PointCloud<pcl::PointXYZRGBA>::Ptr filteredCloud(new pcl::PointCloud<pcl::PointXYZRGBA>);
 	vg.filter(*filteredCloud);
 
-	pcl::copyPointCloud(*filteredCloud, *cloud);
+	cloud.swap(filteredCloud);
 	std::cout << "VoxelGridDownsample end cloud->size(): " << cloud->size() << std::endl;
 }
 
@@ -1792,16 +1815,20 @@ double distance(pcl::PointXYZRGBA Old, pcl::PointXYZRGBA New) {
 	return sqrt(pow(Old.x - New.x, 2) + pow(Old.y - New.y, 2) + pow(Old.z - New.z, 2));
 }
 
-double distance(Point Old, Point New) {
-	return sqrt(pow(Old.x() - New.x(), 2) + pow(Old.y() - New.y(), 2) + pow(Old.z() - New.z(), 2));
+inline double distance(const Point& Old, const Point& New) {
+	double dx = Old.x() - New.x();
+	double dy = Old.y() - New.y();
+	double dz = Old.z() - New.z();
+	return std::sqrt(dx * dx + dy * dy + dz * dz);
 }
 
 //The meshing operation sometimes creates way to large triangles to connect far off points. These are removed for a more accurate representation.
-Polyhedron deleteLargeTriangles(Polyhedron meshInput) {
+Polyhedron deleteLargeTriangles(Polyhedron& meshInput) {
 	cout << "deleteLargeTriangles start " << endl;
+	std::vector<Polyhedron::Halfedge_handle> to_erase;
 	for (Polyhedron::Facet_iterator face = meshInput.facets_begin(); face != meshInput.facets_end(); ++face) {
-		Polyhedron::Halfedge_const_handle begin = face->halfedge();
-		Polyhedron::Halfedge_const_handle edge = begin;
+		Polyhedron::Halfedge_handle begin = face->halfedge();
+		Polyhedron::Halfedge_handle edge = begin;
 		double d = 0;
 		Point ptNew;
 		Point ptOld;
@@ -1816,8 +1843,11 @@ Polyhedron deleteLargeTriangles(Polyhedron meshInput) {
 			i++;
 		} while (edge != begin);
 		if (d > 0.002) {
-			meshInput.erase_facet(face->halfedge());
+			to_erase.push_back(begin);
 		}
+	}
+	for (auto h : to_erase) {
+		meshInput.erase_facet(h);
 	}
 	cout << "deleteLargeTriangles end " << endl;
 	return meshInput;
@@ -1837,15 +1867,10 @@ void formRemovalPlane(pcl::PointCloud<pcl::PointXYZRGBA>::Ptr& inputptr) {
 Polyhedron denseMesh(pcl::PointCloud<pcl::PointXYZRGBA>::Ptr& inputptr) {
 	cout << "denseMesh start size: " << inputptr->size() << endl;
 	Polyhedron output_mesh_buffer;
-	PointList points;
-	Point_set PointsSet;
-	PointsSet.add_normal_map();
-	for (int i = 0; i < inputptr->size(); i++) {
-		Point pt(inputptr->points[i].x, inputptr->points[i].y, inputptr->points[i].z);
-		Point_with_normal pn;
-		pn.first = pt;
-		Point_set::iterator new_item = PointsSet.insert(pn.first, pn.second);
-		points.push_back(pn);
+	std::vector<Point> vertices;
+	vertices.reserve(inputptr->size());
+	for (size_t i = 0; i < inputptr->size(); ++i) {
+		vertices.emplace_back(inputptr->points[i].x, inputptr->points[i].y, inputptr->points[i].z);
 	}
 	typedef std::array<std::size_t, 3> Facet; // Triple of indices
 	std::vector<Facet> facets;
@@ -1853,19 +1878,15 @@ Polyhedron denseMesh(pcl::PointCloud<pcl::PointXYZRGBA>::Ptr& inputptr) {
 	double radius_ratio_bound = 5 * 4;
 	//create polygons from point cloud
 	cout << "denseMesh  advancing_front_surface_reconstruction start" << endl;
-	CGAL::advancing_front_surface_reconstruction(PointsSet.points().begin(), PointsSet.points().end(), std::back_inserter(facets), radius_ratio_bound, beta);
+	CGAL::advancing_front_surface_reconstruction(vertices.begin(), vertices.end(), std::back_inserter(facets), radius_ratio_bound, beta);
 	cout << "denseMesh  advancing_front_surface_reconstruction end" << endl;
-	// copy points for random access
-	std::vector<Point> vertices;
-	vertices.reserve(PointsSet.points().size());
-	std::copy(PointsSet.points().begin(), PointsSet.points().end(), std::back_inserter(vertices));
 	cout << "denseMesh  polygon_soup_to_polygon_mesh start" << endl;
 	//create mesh from polygon
 	CGAL::Polygon_mesh_processing::polygon_soup_to_polygon_mesh(vertices, facets, output_mesh_buffer);
 	cout << "denseMesh  polygon_soup_to_polygon_mesh end" << endl;
 
-	//remove bad (large) polygons
-	output_mesh_buffer = deleteLargeTriangles(output_mesh_buffer);
+	//remove bad (large) polygons in place (no mesh cloning)
+	deleteLargeTriangles(output_mesh_buffer);
 	if (saveClouds) {
 		std::stringstream ss;;
 		ss << dir << file << "denseGrid.off";
@@ -1878,14 +1899,11 @@ Polyhedron denseMesh(pcl::PointCloud<pcl::PointXYZRGBA>::Ptr& inputptr) {
 }
 
 //Sample points from a mesh on a grid. This grid of points is optimal for gaussian filter application. 
-void samplePointsFromMesh(pcl::PointCloud<pcl::PointXYZRGBA>::Ptr& inputptr, Polyhedron polyhedron, double downsampleValue, std::vector<double>& gridParameters) {
+void samplePointsFromMesh(pcl::PointCloud<pcl::PointXYZRGBA>::Ptr& inputptr, const Polyhedron& polyhedron, double downsampleValue, std::vector<double>& gridParameters) {
 	cout << "samplePointsFromMesh start size: " << inputptr->size() << endl;
 	// constructs AABB tree
 	Tree tree(faces(polyhedron).first, faces(polyhedron).second, polyhedron);
-	// constructs segment query
-	pcl::PointCloud<pcl::PointXYZRGBA>::Ptr organizedCloud(new pcl::PointCloud<pcl::PointXYZRGBA>());
 	pcl::PointXYZRGBA minPt, maxPt;
-	pcl::PointXYZRGBA p;
 	//determine grid parameters
 	pcl::getMinMax3D(*inputptr, minPt, maxPt);
 	int stepsX = ceil((maxPt.x - minPt.x) / downsampleValue) + 1;
@@ -1894,84 +1912,65 @@ void samplePointsFromMesh(pcl::PointCloud<pcl::PointXYZRGBA>::Ptr& inputptr, Pol
 	gridParameters.push_back(maxPt.y);
 	gridParameters.push_back(stepsX);
 	gridParameters.push_back(stepsY);
-	Eigen::Vector4f centroid;
-	organizedCloud->width = stepsX;
-	organizedCloud->height = stepsY;
-	organizedCloud->is_dense = false;
-	organizedCloud->points.resize(organizedCloud->height * organizedCloud->width);
+	inputptr->width = stepsX;
+	inputptr->height = stepsY;
+	inputptr->is_dense = false;
+	inputptr->points.resize(stepsX * stepsY);
+	double z_low = minPt.z - 0.015;
+	double z_high = maxPt.z + 0.015;
 	size_t size = stepsX;
 	cout << "samplePointsFromMesh parallel for start" << endl;
 	parallel_for(size_t(0), size, [&](size_t ii) {
-		//for (int ix = 0; ix < stepsX; ix++) {
 		int ix = ii;
+		std::vector<Segment_intersection> intersections;
+		intersections.reserve(4);
 		for (int iy = 0; iy < stepsY; iy++) {
 			double x = minPt.x + ix * downsampleValue;
 			double y = minPt.y + iy * downsampleValue;
-			Point a(x, y, -1);
-			Point b(x, y, 1);
+			Point a(x, y, z_low);
+			Point b(x, y, z_high);
 			Segment segment_query(a, b);
-			std::list<Segment_intersection> intersections;
+			intersections.clear();
 			tree.all_intersections(segment_query, std::back_inserter(intersections));
-			auto intersection2 = intersections.begin();
 			double sum = 0;
 			int ctr = 0;
-			for (int i = 0; i < tree.number_of_intersected_primitives(segment_query); i++) {
-				Segment_intersection intersection = *intersection2;
+			for (const auto& isect : intersections) {
+				if (isect) {
 #if defined(CGAL_VERSION_NR) && CGAL_VERSION_NR >= 1060000000
-				const Point* p = std::get_if<Point>(&intersection->first);
+					const Point* p = std::get_if<Point>(&(isect->first));
 #else
-				const Point* p = boost::get<Point>(&intersection->first);
+					const Point* p = boost::get<Point>(&(isect->first));
 #endif
-				if (p) {
-					sum = p->z();
-					ctr++;
-				}
-				if (i < tree.number_of_intersected_primitives(segment_query)) {
-					std::advance(intersection2, 1);
+					if (p) {
+						sum = p->z();
+						ctr++;
+					}
 				}
 			}
-			organizedCloud->at(ix, iy).x = x;
-			organizedCloud->at(ix, iy).y = y;
-			if (ctr != 0) {
-				if (ctr > 1) {
-					//no z value found
-					organizedCloud->at(ix, iy).z = 1;
-				}
-				else {
-					//new z value
-					organizedCloud->at(ix, iy).z = sum / ctr;
-				}
+			auto& pt = inputptr->at(ix, iy);
+			pt.x = x;
+			pt.y = y;
+			if (ctr == 1) {
+				pt.z = sum;
 			}
 			else {
-				//no z value found
-				organizedCloud->at(ix, iy).z = 1;
+				pt.z = 1;
 			}
 		}
-		//}
-		});
+	});
 	cout << "samplePointsFromMesh parallel for end" << endl;
-	pcl::copyPointCloud(*organizedCloud, *inputptr);
 	cout << "samplePointsFromMesh end size: " << inputptr->size() << endl;
 }
 
 //Determine if points in grid point cloud are missing
 bool checkForMissingPoints(pcl::PointCloud<pcl::PointXYZRGBA>::Ptr& inputptr) {
-	cout << "checkForMissingPoints start" << endl;
-	pcl::PointCloud<pcl::PointXYZRGBA>::Ptr buffer(new pcl::PointCloud<pcl::PointXYZRGBA>());
-	pcl::PassThrough<pcl::PointXYZRGBA> pass;
-	pass.setInputCloud(inputptr);
-	pass.setFilterFieldName("z");
-	pass.setFilterLimits(0.99, 1.01);
-	pass.filter(*buffer);
-	if (buffer->size() > 0) {
-		cout << "checkForMissingPoints: Nbr of missing points: " << buffer->size() << endl;
-		return true;
+	for (size_t i = 0; i < inputptr->size(); ++i) {
+		float z = inputptr->points[i].z;
+		if (z >= 0.99f && z <= 1.01f) {
+			return true;
+		}
 	}
-	else {
-		cout << "checkForMissingPoints: Nbr of missing points: " << buffer->size() << endl;
-		return false;
-	}
-	cout << "checkForMissingPoints end" << endl;
+	return false;
 }
 
 //Interpolate missing z value based on surrounding values
@@ -2277,7 +2276,7 @@ void cropPointCloud(pcl::PointCloud<pcl::PointXYZRGBA>::Ptr& inputptr, std::vect
 			organizedCloud->at(ix - xBegin, iy - yBegin).z = inputptr->at(ix, iy).z;
 		}
 	}
-	pcl::copyPointCloud(*organizedCloud, *inputptr);
+	inputptr->swap(*organizedCloud);
 	gridParameters[2] = xEnd - xBegin;
 	gridParameters[3] = yEnd - yBegin;
 	cout << "cropPointCloud end" << endl;
@@ -2311,13 +2310,10 @@ void createDenseGridPointCloud(pcl::PointCloud<pcl::PointXYZRGBA>::Ptr& inputptr
 			f.close();
 		}
 	}
-	pcl::PointCloud<pcl::PointXYZRGBA>::Ptr gridPointCloud(new pcl::PointCloud<pcl::PointXYZRGBA>);
-	pcl::copyPointCloud(*inputptr, *gridPointCloud);
 	std::vector<double> gridParameters;
-	samplePointsFromMesh(gridPointCloud, mesh, downsampleValue, gridParameters);
-	cropPointCloud(gridPointCloud, gridParameters);
-	fillHolesInGrid(gridPointCloud, gridParameters);
-	pcl::copyPointCloud(*gridPointCloud, *inputptr);
+	samplePointsFromMesh(inputptr, mesh, downsampleValue, gridParameters);
+	cropPointCloud(inputptr, gridParameters);
+	fillHolesInGrid(inputptr, gridParameters);
 	cout << "createDenseGridPointCloud end  " << endl;
 }
 
@@ -2395,91 +2391,108 @@ double Svr(pcl::PointCloud<pcl::PointXYZRGBA>::Ptr& inputptr, double downsamplin
 	int EvalMSize = EMatrix.rows() / 2.0 - 0.5;
 	int height = inputptr->height;
 	int width = inputptr->width;
-	//Create storage Structure
-	std::vector < std::vector < std::vector <double >>> SumMatrix;
-	std::vector < std::vector < std::vector <double >>>  CtrMatrix;
-	MatrixXf SvrMatrix(inputptr->height, inputptr->width);
-	for (int i = 0; i < PointsOnVariogram + 1; i++) {
-		std::vector < std::vector <double >> SumMatrix2;
-		std::vector < std::vector <double >> CtrMatrix2;
 
-		for (int ii = 0; ii < inputptr->width; ii++) {
-			std::vector <double> SumMatrix3;
-			std::vector <double> CtrMatrix3;
-			for (int iii = 0; iii < inputptr->height; iii++) {
-				SumMatrix3.push_back(0);
-				CtrMatrix3.push_back(0);
+	// Flat contiguous matrix for per-column accumulation (eliminates 6000 heap allocations and pointer indirections)
+	std::vector<double> colSum(width * PointsOnVariogram, 0.0);
+	std::vector<size_t> colCtr(width * PointsOnVariogram, 0);
+
+	struct NeighborOffset {
+		int dx;
+		int dy;
+		double dx_sq_dy_sq;
+	};
+	std::vector<NeighborOffset> activeNeighbors;
+	activeNeighbors.reserve(EMatrix.rows() * EMatrix.cols());
+	for (int x = 0; x < EMatrix.rows() - 1; ++x) {
+		for (int y = 0; y < EMatrix.cols() - 1; ++y) {
+			if (EMatrix(x, y) != -1) {
+				int dx = -(EvalMSize - x);
+				int dy = -(EvalMSize - y);
+				double dx_m = dx * downsampling;
+				double dy_m = dy * downsampling;
+				activeNeighbors.push_back({ dx, dy, dx_m * dx_m + dy_m * dy_m });
 			}
-			SumMatrix2.push_back(SumMatrix3);
-			CtrMatrix2.push_back(CtrMatrix3);
 		}
-		SumMatrix.push_back(SumMatrix2);
-		CtrMatrix.push_back(CtrMatrix2);
 	}
-	//Determine sum and counter
+
 	size_t size = inputptr->width;
 	cout << "Svr parallel for start" << endl;
 	parallel_for(size_t(0), size, [&](size_t i) {
-		//for (int i = 0; i < inputptr->width; i++) {
-		for (int m = 0; m < inputptr->height; m++) {
-			int ix = i;
-			//int mx = m;
-			for (int kk = 0; kk < PointsOnVariogram; kk++) {
-				SumMatrix[kk][i][m] = 0;
-				CtrMatrix[kk][i][m] = 0;
-			}
-			int minXGrid = 0, maxXGrid = EMatrix.rows(), minYGrid = 0, maxYGrid = EMatrix.rows();
-			if (ix - EvalMSize < 0) {
-				minXGrid = abs(ix - EvalMSize);
-			}
-			else if (abs(ix - (width - 1)) < EvalMSize) {
-				int distToEdge = abs(ix - (width - 1));
-				maxXGrid = (EMatrix.rows() - (EvalMSize - distToEdge));
-			}
-			if (m - EvalMSize < 0) {
-				minYGrid = abs(m - EvalMSize);
-			}
-			else if (abs(m - (height - 1)) < EvalMSize) {
-				int distToEdge = abs(m - (height - 1));
-				maxYGrid = (EMatrix.rows() - (EvalMSize - distToEdge));
-			}
-			for (int x = minXGrid; x < maxXGrid - 1; x++) {
-				for (int y = minYGrid; y < maxYGrid - 1; y++) {
-					int k = EMatrix(x, y);
-					if (k != -1) {
-						int ii = i - (EvalMSize - x);
-						int mm = m - (EvalMSize - y);
-						//int k2 = k;
-						k = floor(distance(inputptr->at(i, m), inputptr->at(ii, mm)) / span);
-						if (k > -1 && k < PointsOnVariogram) {
-							SumMatrix[k][i][m] += pow(1000 * (inputptr->at(i, m).z - inputptr->at(ii, mm).z), 2);
-							CtrMatrix[k][i][m] += 1;
+		double* myColSum = &colSum[i * PointsOnVariogram];
+		size_t* myColCtr = &colCtr[i * PointsOnVariogram];
+		const bool safeX = (static_cast<int>(i) >= EvalMSize && static_cast<int>(i) < width - EvalMSize);
+		for (int m = 0; m < height; m++) {
+			const double z_im = inputptr->at(i, m).z;
+			const bool safeY = (m >= EvalMSize && m < height - EvalMSize);
+
+			if (safeX && safeY) {
+				// Fast path: inner region away from edges (no bounds clamping or branch overhead)
+				for (const auto& nb : activeNeighbors) {
+					int ii = static_cast<int>(i) + nb.dx;
+					int mm = m + nb.dy;
+					double dz = z_im - inputptr->at(ii, mm).z;
+					double dist = std::sqrt(nb.dx_sq_dy_sq + dz * dz);
+					int k = static_cast<int>(std::floor(dist / span));
+					if (k > -1 && k < PointsOnVariogram) {
+						double diff = 1000.0 * dz;
+						myColSum[k] += diff * diff;
+						myColCtr[k] += 1;
+					}
+				}
+			} else {
+				// Boundary path: respects exact original minXGrid/maxXGrid/minYGrid/maxYGrid range limits
+				int minXGrid = 0, maxXGrid = EMatrix.rows(), minYGrid = 0, maxYGrid = EMatrix.rows();
+				if (static_cast<int>(i) - EvalMSize < 0) {
+					minXGrid = abs(static_cast<int>(i) - EvalMSize);
+				}
+				else if (abs(static_cast<int>(i) - (width - 1)) < EvalMSize) {
+					int distToEdge = abs(static_cast<int>(i) - (width - 1));
+					maxXGrid = (EMatrix.rows() - (EvalMSize - distToEdge));
+				}
+				if (m - EvalMSize < 0) {
+					minYGrid = abs(m - EvalMSize);
+				}
+				else if (abs(m - (height - 1)) < EvalMSize) {
+					int distToEdge = abs(m - (height - 1));
+					maxYGrid = (EMatrix.rows() - (EvalMSize - distToEdge));
+				}
+				for (int x = minXGrid; x < maxXGrid - 1; x++) {
+					int dx = -(EvalMSize - x);
+					double dx_m = dx * downsampling;
+					int ii = static_cast<int>(i) + dx;
+					for (int y = minYGrid; y < maxYGrid - 1; y++) {
+						if (EMatrix(x, y) != -1) {
+							int dy = -(EvalMSize - y);
+							double dy_m = dy * downsampling;
+							int mm = m + dy;
+							double dz = z_im - inputptr->at(ii, mm).z;
+							double dist = std::sqrt(dx_m * dx_m + dy_m * dy_m + dz * dz);
+							int k = static_cast<int>(std::floor(dist / span));
+							if (k > -1 && k < PointsOnVariogram) {
+								double diff = 1000.0 * dz;
+								myColSum[k] += diff * diff;
+								myColCtr[k] += 1;
+							}
 						}
 					}
 				}
 			}
 		}
-		//}
-		});
+	});
 	cout << "Svr parallel for end" << endl;
-	std::vector<float> sumVec(PointsOnVariogram, 1);
-	std::vector<float> CtrVec(PointsOnVariogram, 1);
-	std::vector<double> varVec(PointsOnVariogram, 1);
+	std::vector<float> sumVec(PointsOnVariogram, 0.0f);
+	std::vector<float> CtrVec(PointsOnVariogram, 0.0f);
+	std::vector<double> varVec(PointsOnVariogram, 0.0);
 	double Svr3 = 0;
 	double CtrAll = 0;
 	//calculate roughness from sum and counter.
 	for (int k = 0; k < PointsOnVariogram; k++) {
-		sumVec[k] = 0;
-		CtrVec[k] = 0;
-		varVec[k] = 0;
 		for (int i = 0; i < inputptr->width; i++) {
-			for (int m = 0; m < inputptr->height; m++) {
-				sumVec[k] += SumMatrix[k][i][m];  // accumulate(sumVecParallel[i].begin(), sumVecParallel[i].end(), 0);
-				CtrVec[k] += CtrMatrix[k][i][m];  // accumulate(CtrVecParallel[i].begin(), CtrVecParallel[i].end(), 0);
-			}
+			sumVec[k] += colSum[i * PointsOnVariogram + k];
+			CtrVec[k] += colCtr[i * PointsOnVariogram + k];
 		}
 		if (CtrVec[k] > 0) {
-			varVec[k] = sqrt((1 / (2 * CtrVec[k])) * sumVec[k]);
+			varVec[k] = sqrt((1.0 / (2.0 * CtrVec[k])) * sumVec[k]);
 			CtrAll += CtrVec[k];
 			Svr3 += varVec[k];
 		}

@@ -7,13 +7,7 @@ from typing import Any, Callable
 import numpy as np
 import numpy.typing as npt
 
-from ._display_grid import (
-    apply_filters,
-    crop_points,
-    fill_holes_neighbor_mean,
-    fit_plane_basis,
-    grid_residuals,
-)
+from ._display_grid import crop_points, fit_plane_basis
 from .config import RoughnessConfig, coerce_range
 from .io import load_ascii_ply, load_points
 from .native import analyze_native
@@ -30,6 +24,10 @@ def analyze_points(
 
     This is the canonical roughness path. File-specific APIs load data and
     then delegate here to execute the native C++ numerical engine.
+
+    All heavy computation (gridding, Gaussian filtering, variogram) is
+    performed by the C++ core. Python only handles I/O, validation, and
+    packaging the result.
     """
 
     resolved = _resolve_config(config, overrides)
@@ -57,40 +55,54 @@ def analyze_points(
     if len(selected) < 20:
         raise ValueError("SurfInspect native core requires at least 20 valid points")
 
-    # Strictly execute the native C++ core extracted from Cloud-Viewer
+    # ── Execute the native C++ core (all heavy math happens here) ──
     native = analyze_native(selected, resolved)
-    sa_um = native[0]
-    sq_um = native[1]
-    svr_um = native[2]
-    cropped_points = native[4]
-    variogram_bins_um = native[5]
-    variogram_counts = native[6]
-    surface_distances_mm = native[7]
 
-    # Compute 2D grid matrix for visualization heatmaps
+    # ── Plane fit for metadata ──
     plane = fit_plane_basis(selected)
-    cropped, _ = crop_points(plane.coords, resolved)
-    grid_raw, valid_raw, grid_origin = grid_residuals(cropped, resolved.grid_mm, resolved.min_points_per_cell)
-    grid_filled, valid_filled = fill_holes_neighbor_mean(grid_raw, valid_raw, resolved.max_hole_passes)
-    grid_filtered = apply_filters(grid_filled, valid_filled, resolved.grid_mm, resolved.short_cutoff_mm, resolved.long_cutoff_mm)
-    grid_filtered = grid_filtered - np.nanmean(grid_filtered[valid_filled])
+
+    # ── Package the C++ grid into RoughnessGrid ──
+    if native.grid_z_mm is not None and native.grid_origin_mm is not None:
+        grid_z = native.grid_z_mm
+        valid = ~np.isnan(grid_z)
+        grid = RoughnessGrid(
+            raw=grid_z,
+            filled=grid_z,
+            filtered=grid_z,
+            valid_raw=valid,
+            valid_filled=valid,
+            origin=native.grid_origin_mm,
+            svr_map=native.grid_svr_um,
+        )
+    else:
+        # Non-standard path (gaussian_mesh=False) — no organized grid available.
+        # Create a minimal 1×1 placeholder so the result type is always valid.
+        empty = np.full((1, 1), np.nan, dtype=np.float64)
+        grid = RoughnessGrid(
+            raw=empty,
+            filled=empty,
+            filtered=empty,
+            valid_raw=np.zeros((1, 1), dtype=bool),
+            valid_filled=np.zeros((1, 1), dtype=bool),
+            origin=np.array([0.0, 0.0, resolved.grid_mm], dtype=np.float64),
+        )
 
     if progress:
         progress("Complete", 1.0)
     return RoughnessResult(
-        sa_um=sa_um,
-        sq_um=sq_um,
-        svr_um=svr_um,
+        sa_um=native.sa_um,
+        sq_um=native.sq_um,
+        svr_um=native.svr_um,
         points=int(len(points)),
-        cropped_points=cropped_points,
+        cropped_points=native.processed_points,
         plane=plane,
         raw_residual_std_mm=float(plane.coords[:, 2].std()),
         raw_residual_p05_mm=float(np.percentile(plane.coords[:, 2], 5)),
         raw_residual_p95_mm=float(np.percentile(plane.coords[:, 2], 95)),
-        grid=RoughnessGrid(grid_raw, grid_filled, grid_filtered, valid_raw, valid_filled, grid_origin),
-        surface_distances_mm=surface_distances_mm,
-        variogram_bins_um=variogram_bins_um,
-        variogram_counts=variogram_counts,
+        grid=grid,
+        surface_distances_mm=native.surface_distances_mm,
+        variogram_bins_um=native.variogram_bins_um,
+        variogram_counts=native.variogram_counts,
         config=resolved,
     )
 

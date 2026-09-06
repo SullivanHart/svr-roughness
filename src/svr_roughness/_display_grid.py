@@ -2,22 +2,39 @@ from __future__ import annotations
 
 import numpy as np
 import numpy.typing as npt
-from scipy.ndimage import convolve, distance_transform_edt, gaussian_filter
 
 from .config import RoughnessConfig
 from .result import BoolArray, FloatArray, PlaneFit
 
 
 def fit_plane_basis(points: npt.ArrayLike) -> PlaneFit:
+    """Fit a plane to the point cloud and return a local coordinate system.
+
+    The X-axis is the projection of global X onto the fitted plane, preserving
+    the original scan orientation rather than rotating to PCA axes.
+    """
     points_array = np.asarray(points, dtype=np.float64)
     centroid = points_array.mean(axis=0)
     centered = points_array - centroid
     _, _, vh = np.linalg.svd(centered, full_matrices=False)
     normal = vh[-1]
+    if normal[2] < 0:
+        normal = -normal
     normal /= np.linalg.norm(normal)
-    x_axis = vh[0]
-    x_axis -= normal * np.dot(x_axis, normal)
-    x_axis /= np.linalg.norm(x_axis)
+
+    # Project global X-axis onto the fitted plane to keep the original scan orientation
+    # instead of rotating based on point distribution variance (PCA).
+    global_x = np.array([1.0, 0.0, 0.0])
+    x_axis = global_x - normal * np.dot(global_x, normal)
+    x_axis_norm = np.linalg.norm(x_axis)
+
+    if x_axis_norm < 1e-6:
+        global_y = np.array([0.0, 1.0, 0.0])
+        x_axis = global_y - normal * np.dot(global_y, normal)
+        x_axis /= np.linalg.norm(x_axis)
+    else:
+        x_axis /= x_axis_norm
+
     y_axis = np.cross(normal, x_axis)
     y_axis /= np.linalg.norm(y_axis)
     coords = np.column_stack((centered @ x_axis, centered @ y_axis, centered @ normal))
@@ -25,6 +42,7 @@ def fit_plane_basis(points: npt.ArrayLike) -> PlaneFit:
 
 
 def crop_points(coords: FloatArray, config: RoughnessConfig) -> tuple[FloatArray, BoolArray]:
+    """Crop points by percentile and/or range filters."""
     mask = np.ones(len(coords), dtype=bool)
     if config.percentile_crop > 0:
         p = config.percentile_crop
@@ -39,101 +57,6 @@ def crop_points(coords: FloatArray, config: RoughnessConfig) -> tuple[FloatArray
     if config.z_range:
         mask &= (coords[:, 2] >= config.z_range[0]) & (coords[:, 2] <= config.z_range[1])
     return coords[mask], mask
-
-
-def grid_residuals(
-    coords: FloatArray,
-    grid_mm: float,
-    min_points_per_cell: int,
-) -> tuple[FloatArray, BoolArray, FloatArray]:
-    if grid_mm <= 0:
-        raise ValueError("grid_mm must be greater than zero")
-    if min_points_per_cell < 1:
-        raise ValueError("min_points_per_cell must be at least 1")
-    if len(coords) == 0:
-        raise ValueError("No points remain after cropping")
-
-    x, y, z = coords[:, 0], coords[:, 1], coords[:, 2]
-    x0, x1 = x.min(), x.max()
-    y0, y1 = y.min(), y.max()
-
-    cols = max(1, int(np.ceil((x1 - x0) / grid_mm)) + 1)
-    rows = max(1, int(np.ceil((y1 - y0) / grid_mm)) + 1)
-
-    ix = np.clip(np.floor((x - x0) / grid_mm).astype(int), 0, cols - 1)
-    iy = np.clip(np.floor((y - y0) / grid_mm).astype(int), 0, rows - 1)
-
-    linear_indices = iy * cols + ix
-    cell_count = rows * cols
-
-    counts = np.bincount(linear_indices, minlength=cell_count).reshape((rows, cols))
-    sums = np.bincount(linear_indices, weights=z, minlength=cell_count).reshape((rows, cols))
-
-    valid = counts >= min_points_per_cell
-    grid = np.full((rows, cols), np.nan, dtype=np.float64)
-    grid[valid] = sums[valid] / counts[valid]
-
-    origin = np.array([x0, y0, grid_mm], dtype=np.float64)
-    return grid, valid, origin
-
-
-def fill_holes_neighbor_mean(grid: FloatArray, valid: BoolArray, max_passes: int = 5) -> tuple[FloatArray, BoolArray]:
-    filled = grid.copy()
-    valid_mask = valid.copy()
-    rows, cols = grid.shape
-
-    for _ in range(max_passes):
-        missing = ~valid_mask
-        if not np.any(missing):
-            break
-
-        kernel = np.array([[1, 1, 1], [1, 0, 1], [1, 1, 1]], dtype=np.float64)
-        valid_float = valid_mask.astype(np.float64)
-        values_zeroed = np.nan_to_num(filled, nan=0.0)
-
-        neighbor_sums = convolve(values_zeroed, kernel, mode="constant", cval=0.0)
-        neighbor_counts = convolve(valid_float, kernel, mode="constant", cval=0.0)
-
-        fillable = missing & (neighbor_counts > 0)
-        if not np.any(fillable):
-            break
-
-        filled[fillable] = neighbor_sums[fillable] / neighbor_counts[fillable]
-        valid_mask[fillable] = True
-
-    return filled, valid_mask
-
-
-def apply_filters(
-    grid_filled: FloatArray,
-    valid_mask: BoolArray,
-    grid_mm: float,
-    short_cutoff_mm: float,
-    long_cutoff_mm: float,
-) -> FloatArray:
-    output = grid_filled.copy()
-    if not np.any(valid_mask):
-        return output
-
-    # Replace NaNs before gaussian_filter so NaNs do not propagate into valid surface data
-    nan_mask = np.isnan(output)
-    if np.any(nan_mask):
-        output[nan_mask] = 0.0
-
-    if short_cutoff_mm > 0:
-        sigma_short = (short_cutoff_mm / grid_mm) / (2.0 * np.pi)
-        if sigma_short > 0:
-            lowpass = gaussian_filter(output, sigma=sigma_short, mode="nearest")
-            output = output - lowpass
-
-    if long_cutoff_mm > 0:
-        sigma_long = (long_cutoff_mm / grid_mm) / (2.0 * np.pi)
-        if sigma_long > 0:
-            form = gaussian_filter(output, sigma=sigma_long, mode="nearest")
-            output = output - form
-
-    output[~valid_mask] = np.nan
-    return output
 
 
 def svr_map(

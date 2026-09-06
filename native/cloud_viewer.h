@@ -1,4 +1,4 @@
-﻿#ifndef PCL_CLOUD_VIEWER_H_
+#ifndef PCL_CLOUD_VIEWER_H_
 #define PCL_CLOUD_VIEWER_H_
 
 #include "types.h"
@@ -250,15 +250,15 @@ void transformPc(const pcl::PointCloud<pcl::PointXYZRGBA>::Ptr& inputptr, Eigen:
 
 double distance(pcl::PointXYZRGBA Old, pcl::PointXYZRGBA New);
 
-double distance(Point Old, Point New);
+double distance(const Point& Old, const Point& New);
 
-Polyhedron deleteLargeTriangles(Polyhedron meshInput);
+Polyhedron deleteLargeTriangles(Polyhedron& meshInput);
 
 void formRemovalPlane(pcl::PointCloud<pcl::PointXYZRGBA>::Ptr& inputptr);
 
 Polyhedron denseMesh(pcl::PointCloud<pcl::PointXYZRGBA>::Ptr& inputptr);
 
-void samplePointsFromMesh(pcl::PointCloud<pcl::PointXYZRGBA>::Ptr& inputptr, Polyhedron polyhedron, double downsampleValue, std::vector<double>& gridParameters);
+void samplePointsFromMesh(pcl::PointCloud<pcl::PointXYZRGBA>::Ptr& inputptr, const Polyhedron& polyhedron, double downsampleValue, std::vector<double>& gridParameters);
 
 bool checkForMissingPoints(pcl::PointCloud<pcl::PointXYZRGBA>::Ptr& inputptr);
 

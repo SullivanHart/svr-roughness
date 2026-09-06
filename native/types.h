@@ -57,8 +57,8 @@ typedef CGAL::Surface_mesh_default_triangulation_3 STr;
 typedef CGAL::Surface_mesh_complex_2_in_triangulation_3<STr> C2t3;
 typedef CGAL::Implicit_surface_3<Kernel, Poisson_reconstruction_function> Surface_3;
 
-// AABB_tree typedefs
-typedef CGAL::AABB_face_graph_triangle_primitive<Polyhedron, CGAL::Default, CGAL::Tag_false> Primitive;
+// AABB_tree typedefs (Tag_true caches triangle coordinates directly in tree nodes)
+typedef CGAL::AABB_face_graph_triangle_primitive<Polyhedron, CGAL::Default, CGAL::Tag_true> Primitive;
 #if defined(CGAL_VERSION_NR) && CGAL_VERSION_NR >= 1060000000
 typedef CGAL::AABB_traits_3<Kernel, Primitive> Traits;
 #else

@@ -10,6 +10,7 @@ from __future__ import annotations
 import ctypes
 import os
 from pathlib import Path
+from typing import NamedTuple
 
 import numpy as np
 import numpy.typing as npt
@@ -47,7 +48,29 @@ class _NativeResult(ctypes.Structure):
         ("variogram_counts", ctypes.POINTER(ctypes.c_size_t)),
         ("distance_count", ctypes.c_size_t),
         ("signed_distances_mm", ctypes.POINTER(ctypes.c_double)),
+        ("grid_width", ctypes.c_size_t),
+        ("grid_height", ctypes.c_size_t),
+        ("grid_origin_x_mm", ctypes.c_double),
+        ("grid_origin_y_mm", ctypes.c_double),
+        ("grid_z_mm", ctypes.POINTER(ctypes.c_double)),
+        ("grid_svr_um", ctypes.POINTER(ctypes.c_double)),
     ]
+
+
+class NativeAnalysisResult(NamedTuple):
+    """Structured return from the native C++ analysis core."""
+
+    sa_um: float
+    sq_um: float
+    svr_um: float
+    input_points: int
+    processed_points: int
+    variogram_bins_um: np.ndarray
+    variogram_counts: np.ndarray
+    surface_distances_mm: np.ndarray
+    grid_z_mm: np.ndarray | None
+    grid_svr_um: np.ndarray | None
+    grid_origin_mm: np.ndarray | None
 
 
 def _library_candidates() -> list[Path]:
@@ -115,7 +138,13 @@ def _load_library() -> ctypes.CDLL:
 
 def analyze_native(
     points_xyz_mm: npt.ArrayLike, config: RoughnessConfig
-) -> tuple[float, float, float, int, int, np.ndarray, np.ndarray, np.ndarray]:
+) -> NativeAnalysisResult:
+    """Run the native C++ SurfInspect analysis core.
+
+    Returns a NativeAnalysisResult with metrics, variogram, distances,
+    and (when gaussian_mesh is enabled) the 2D filtered grid produced
+    by the C++ ISO 16610-61 Gaussian pipeline.
+    """
     points = np.ascontiguousarray(np.asarray(points_xyz_mm, dtype=np.float64))
     if points.ndim != 2 or points.shape[1] != 3:
         raise ValueError("Expected an Nx3 point array")
@@ -147,24 +176,51 @@ def analyze_native(
         message = library.si_last_error().decode("utf-8", errors="replace")
         raise RuntimeError(f"Native SurfInspect analysis failed: {message}")
     try:
-        bins = np.ctypeslib.as_array(
+        variogram_bins = np.ctypeslib.as_array(
             native_result.variogram_um, shape=(native_result.variogram_points,)
         ).copy()
-        counts = np.ctypeslib.as_array(
+        variogram_counts = np.ctypeslib.as_array(
             native_result.variogram_counts, shape=(native_result.variogram_points,)
         ).copy()
         distances = np.ctypeslib.as_array(
             native_result.signed_distances_mm, shape=(native_result.distance_count,)
         ).copy()
-        return (
-            float(native_result.sa_um),
-            float(native_result.sq_um),
-            float(native_result.svr_um),
-            int(native_result.input_points),
-            int(native_result.processed_points),
-            bins,
-            counts,
-            distances,
+
+        # Extract the 2D grid if the C++ core produced an organized point cloud.
+        # This is the case when gaussian_mesh=True (the standard-compliant path).
+        grid_z: np.ndarray | None = None
+        grid_svr: np.ndarray | None = None
+        grid_origin: np.ndarray | None = None
+        if native_result.grid_width > 1 and native_result.grid_height > 1 and native_result.grid_z_mm:
+            total = native_result.grid_width * native_result.grid_height
+            grid_flat = np.ctypeslib.as_array(
+                native_result.grid_z_mm, shape=(total,)
+            ).copy()
+            # PCL organized clouds store points row-major: height rows x width cols.
+            grid_z = grid_flat.reshape((native_result.grid_height, native_result.grid_width))
+            if native_result.grid_svr_um:
+                grid_svr_flat = np.ctypeslib.as_array(
+                    native_result.grid_svr_um, shape=(total,)
+                ).copy()
+                grid_svr = grid_svr_flat.reshape((native_result.grid_height, native_result.grid_width))
+            grid_origin = np.array([
+                native_result.grid_origin_x_mm,
+                native_result.grid_origin_y_mm,
+                config.grid_mm,
+            ], dtype=np.float64)
+
+        return NativeAnalysisResult(
+            sa_um=float(native_result.sa_um),
+            sq_um=float(native_result.sq_um),
+            svr_um=float(native_result.svr_um),
+            input_points=int(native_result.input_points),
+            processed_points=int(native_result.processed_points),
+            variogram_bins_um=variogram_bins,
+            variogram_counts=variogram_counts,
+            surface_distances_mm=distances,
+            grid_z_mm=grid_z,
+            grid_svr_um=grid_svr,
+            grid_origin_mm=grid_origin,
         )
     finally:
         library.si_free_result(ctypes.byref(native_result))
