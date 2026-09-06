@@ -80,10 +80,9 @@ def load_ply(path: str | Path) -> FloatArray:
             rows = np.loadtxt(handle, max_rows=vertex_count, usecols=xyz_indexes, dtype=np.float64)
         elif data_format in ("binary_little_endian", "binary_big_endian"):
             byte_order = "<" if data_format == "binary_little_endian" else ">"
-            dtype = np.dtype([
-                (name, _ply_numpy_dtype(type_name))
-                for name, type_name in zip(vertex_properties, vertex_types)
-            ]).newbyteorder(byte_order)
+            dtype = np.dtype(
+                [(name, _ply_numpy_dtype(type_name)) for name, type_name in zip(vertex_properties, vertex_types)]
+            ).newbyteorder(byte_order)
             vertices = np.fromfile(handle, dtype=dtype, count=vertex_count)
             rows = np.column_stack([vertices[vertex_properties[index]] for index in xyz_indexes])
         else:
@@ -122,10 +121,20 @@ def load_obj(path: str | Path) -> FloatArray:
 
 def _ply_numpy_dtype(type_name: str) -> str:
     dtype = {
-        "char": "<i1", "int8": "<i1", "uchar": "<u1", "uint8": "<u1",
-        "short": "<i2", "int16": "<i2", "ushort": "<u2", "uint16": "<u2",
-        "int": "<i4", "int32": "<i4", "uint": "<u4", "uint32": "<u4",
-        "float": "<f4", "double": "<f8",
+        "char": "<i1",
+        "int8": "<i1",
+        "uchar": "<u1",
+        "uint8": "<u1",
+        "short": "<i2",
+        "int16": "<i2",
+        "ushort": "<u2",
+        "uint16": "<u2",
+        "int": "<i4",
+        "int32": "<i4",
+        "uint": "<u4",
+        "uint32": "<u4",
+        "float": "<f4",
+        "double": "<f8",
     }.get(type_name)
     if dtype is None:
         raise ValueError(f"Unsupported PLY property type: {type_name}")

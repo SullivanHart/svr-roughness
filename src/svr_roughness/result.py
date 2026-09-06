@@ -90,7 +90,7 @@ class RoughnessResult:
 
     def comparator_equivalents(self) -> dict[str, str]:
         """Convert S_VR to approximate equivalent comparator visual grades per Appendices X1-X3.
-        
+
         ASTM WK92969 references:
           - Appendix X1: GAR C-9 Cast Microfinish Comparator
           - Appendix X2: SCRATA Standard (ASTM A802)
@@ -219,9 +219,9 @@ def format_report(result: RoughnessResult, target_svr_mm: float | None = None) -
     spacing = result.average_point_spacing_mm
 
     # ASTM WK92969 §3.1.5 recommendation: 50x50 mm or larger
-    patch_valid = (patch_w >= 50.0 and patch_h >= 50.0)
+    patch_valid = patch_w >= 50.0 and patch_h >= 50.0
     # ASTM WK92969 §8.2 requirement: Point density of 0.2 mm or better required
-    density_valid = (spacing <= 0.20)
+    density_valid = spacing <= 0.20
 
     lines = [
         "═══════════════════════════════════════════════════════",
@@ -235,74 +235,82 @@ def format_report(result: RoughnessResult, target_svr_mm: float | None = None) -
     ]
 
     if target_svr_mm is not None and target_svr_mm > 0:
-        passed = (result.svr_mm <= target_svr_mm)
+        passed = result.svr_mm <= target_svr_mm
         status_str = "PASS (Within specification)" if passed else "FAIL (Exceeds specification)"
-        lines.extend([
-            f"  Purchaser Spec Target: <= {target_svr_mm:.4f} mm",
-            f"  Status (§5.3):        {status_str}",
-        ])
+        lines.extend(
+            [
+                f"  Purchaser Spec Target: <= {target_svr_mm:.4f} mm",
+                f"  Status (§5.3):        {status_str}",
+            ]
+        )
 
-    lines.extend([
-        "",
-        "§10.1.2  Evaluation Length",
-        f"  {eval_length_mm:.1f} mm  ({result.config.svr_points} bins × {result.config.svr_span_mm} mm)",
-        "",
-        "§10.1.3  Distance Bucket Size",
-        f"  {result.config.svr_span_mm} mm",
-        "",
-        "§10.1.4  Cutoff Wavelengths",
-        f"  Short (λs): {result.config.short_cutoff_mm:g} mm",
-        f"  Long  (λc): {result.config.long_cutoff_mm:g} mm",
-        "",
-        "§10.1.5  Pre-processing Parameters",
-        f"  Downsampling:   {result.config.grid_mm} mm",
-        f"  Outlier filter: {'ON (k={}, σ={})'.format(result.config.statistical_mean_k, result.config.statistical_stddev) if result.config.statistical_filter else 'OFF'}",
-        f"  Gaussian mesh:  {'ON (ISO 16610-61)' if result.config.gaussian_mesh else 'OFF'}",
-        "",
-        "───────────────────────────────────────────────────────",
-        "  Surface Patch & Sensor Validation",
-        "───────────────────────────────────────────────────────",
-        f"  Patch Dimensions (§3.1.5): {patch_w:.1f} × {patch_h:.1f} mm (Area: {result.patch_area_mm2:.0f} mm²)",
-        f"  Patch Size Status:         {'VALID (>= 50x50 mm)' if patch_valid else 'WARNING (< 50x50 mm recommended)'}",
-        f"  Raw Points:                {result.points:,}",
-        f"  Processed Points:          {result.cropped_points:,}",
-        f"  Avg Point Spacing (§8.2):  {spacing:.3f} mm (~{density:.1f} pts/mm²)",
-        f"  Point Density Status:      {'VALID (<= 0.20 mm spacing)' if density_valid else 'WARNING (> 0.20 mm required)'}",
-        f"  Scanner Accuracy (§7.1):   Recommended < 0.076 mm (0.0030 in)",
-        f"  Grid:                      {result.grid.raw.shape[1]} × {result.grid.raw.shape[0]} cells, pitch={result.config.grid_mm:.4f} mm",
-        f"  Grid Coverage:             {result.grid.valid_filled.mean() * 100:.1f}%",
-        "",
-        "───────────────────────────────────────────────────────",
-        "  Visual Comparator Equivalents (Appendices X1-X3)",
-        "───────────────────────────────────────────────────────",
-    ])
+    lines.extend(
+        [
+            "",
+            "§10.1.2  Evaluation Length",
+            f"  {eval_length_mm:.1f} mm  ({result.config.svr_points} bins × {result.config.svr_span_mm} mm)",
+            "",
+            "§10.1.3  Distance Bucket Size",
+            f"  {result.config.svr_span_mm} mm",
+            "",
+            "§10.1.4  Cutoff Wavelengths",
+            f"  Short (λs): {result.config.short_cutoff_mm:g} mm",
+            f"  Long  (λc): {result.config.long_cutoff_mm:g} mm",
+            "",
+            "§10.1.5  Pre-processing Parameters",
+            f"  Downsampling:   {result.config.grid_mm} mm",
+            f"  Outlier filter: {f'ON (k={result.config.statistical_mean_k}, σ={result.config.statistical_stddev})' if result.config.statistical_filter else 'OFF'}",
+            f"  Gaussian mesh:  {'ON (ISO 16610-61)' if result.config.gaussian_mesh else 'OFF'}",
+            "",
+            "───────────────────────────────────────────────────────",
+            "  Surface Patch & Sensor Validation",
+            "───────────────────────────────────────────────────────",
+            f"  Patch Dimensions (§3.1.5): {patch_w:.1f} × {patch_h:.1f} mm (Area: {result.patch_area_mm2:.0f} mm²)",
+            f"  Patch Size Status:         {'VALID (>= 50x50 mm)' if patch_valid else 'WARNING (< 50x50 mm recommended)'}",
+            f"  Raw Points:                {result.points:,}",
+            f"  Processed Points:          {result.cropped_points:,}",
+            f"  Avg Point Spacing (§8.2):  {spacing:.3f} mm (~{density:.1f} pts/mm²)",
+            f"  Point Density Status:      {'VALID (<= 0.20 mm spacing)' if density_valid else 'WARNING (> 0.20 mm required)'}",
+            "  Scanner Accuracy (§7.1):   Recommended < 0.076 mm (0.0030 in)",
+            f"  Grid:                      {result.grid.raw.shape[1]} × {result.grid.raw.shape[0]} cells, pitch={result.config.grid_mm:.4f} mm",
+            f"  Grid Coverage:             {result.grid.valid_filled.mean() * 100:.1f}%",
+            "",
+            "───────────────────────────────────────────────────────",
+            "  Visual Comparator Equivalents (Appendices X1-X3)",
+            "───────────────────────────────────────────────────────",
+        ]
+    )
 
     for std_name, grade in result.comparator_equivalents().items():
         lines.append(f"  {std_name:<24}: {grade}")
 
-    lines.extend([
-        "",
-        "───────────────────────────────────────────────────────",
-        "  Plane & Geometry Alignment",
-        "───────────────────────────────────────────────────────",
-        f"  Plane centroid: {result.plane.centroid}",
-        f"  Plane normal:   {result.plane.normal}",
-        (
-            f"  Raw residual mm: "
-            f"std={result.raw_residual_std_mm:.6f} "
-            f"p05={result.raw_residual_p05_mm:.6f} "
-            f"p95={result.raw_residual_p95_mm:.6f}"
-        ),
-        "",
-        "───────────────────────────────────────────────────────",
-        "  Variogram Bins (Evaluation Length 0 to 5.0 mm)",
-        "───────────────────────────────────────────────────────",
-    ])
+    lines.extend(
+        [
+            "",
+            "───────────────────────────────────────────────────────",
+            "  Plane & Geometry Alignment",
+            "───────────────────────────────────────────────────────",
+            f"  Plane centroid: {result.plane.centroid}",
+            f"  Plane normal:   {result.plane.normal}",
+            (
+                f"  Raw residual mm: "
+                f"std={result.raw_residual_std_mm:.6f} "
+                f"p05={result.raw_residual_p05_mm:.6f} "
+                f"p95={result.raw_residual_p95_mm:.6f}"
+            ),
+            "",
+            "───────────────────────────────────────────────────────",
+            "  Variogram Bins (Evaluation Length 0 to 5.0 mm)",
+            "───────────────────────────────────────────────────────",
+        ]
+    )
     for idx, value in enumerate(result.variogram_bins_um):
         lo = idx * result.config.svr_span_mm
         hi = (idx + 1) * result.config.svr_span_mm
         if np.isfinite(value):
-            lines.append(f"  {lo:.3f}–{hi:.3f} mm: {value:.3f} µm ({value/1000.0:.4f} mm)  pairs={result.variogram_counts[idx]}")
+            lines.append(
+                f"  {lo:.3f}–{hi:.3f} mm: {value:.3f} µm ({value / 1000.0:.4f} mm)  pairs={result.variogram_counts[idx]}"
+            )
         else:
             lines.append(f"  {lo:.3f}–{hi:.3f} mm: no pairs")
     return "\n".join(lines)

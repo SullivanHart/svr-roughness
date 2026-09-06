@@ -1,8 +1,10 @@
-import unittest
 import tempfile
+import unittest
 from pathlib import Path
+
 import numpy as np
-from svr_roughness.io import load_ply, load_ascii_ply
+
+from svr_roughness.io import load_ascii_ply
 
 
 class TestIO(unittest.TestCase):
@@ -37,4 +39,3 @@ class TestIO(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

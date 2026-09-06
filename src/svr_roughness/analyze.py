@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import fields, replace
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 import numpy as np
 import numpy.typing as npt
@@ -11,7 +12,7 @@ from ._display_grid import crop_points, fit_plane_basis
 from .config import RoughnessConfig, coerce_range
 from .io import load_ascii_ply, load_points
 from .native import analyze_native
-from .result import PlaneFit, RoughnessGrid, RoughnessResult
+from .result import RoughnessGrid, RoughnessResult
 
 
 def analyze_points(
@@ -93,12 +94,12 @@ def analyze_points(
         sa_um=native.sa_um,
         sq_um=native.sq_um,
         svr_um=native.svr_um,
-        points=int(len(points)),
+        points=len(points),
         cropped_points=native.processed_points,
         plane=plane,
         raw_residual_std_mm=float(plane.coords[:, 2].std()),
-        raw_residual_p05_mm=float(np.percentile(plane.coords[::max(1, len(plane.coords) // 50000), 2], 5)),
-        raw_residual_p95_mm=float(np.percentile(plane.coords[::max(1, len(plane.coords) // 50000), 2], 95)),
+        raw_residual_p05_mm=float(np.percentile(plane.coords[:: max(1, len(plane.coords) // 50000), 2], 5)),
+        raw_residual_p95_mm=float(np.percentile(plane.coords[:: max(1, len(plane.coords) // 50000), 2], 95)),
         grid=grid,
         surface_distances_mm=native.surface_distances_mm,
         variogram_bins_um=native.variogram_bins_um,

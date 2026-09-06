@@ -99,4 +99,3 @@ def svr_map(
         output[r, c] = float(np.sqrt(np.mean(diffs_um**2)))
 
     return output
-

@@ -14,8 +14,9 @@ def main() -> None:
     parser.add_argument("--grid-mm", type=float, default=0.30)
     parser.add_argument("--short-cutoff-mm", type=float, default=0.0)
     parser.add_argument("--long-cutoff-mm", type=float, default=0.0)
-    parser.add_argument("--gaussian-mesh", action="store_true",
-                        help="Use the recovered Cloud-Viewer legacy Gaussian mesh path")
+    parser.add_argument(
+        "--gaussian-mesh", action="store_true", help="Use the recovered Cloud-Viewer legacy Gaussian mesh path"
+    )
     parser.add_argument("--metrics-out", type=Path)
     parser.add_argument("--grid-out", type=Path)
     args = parser.parse_args()

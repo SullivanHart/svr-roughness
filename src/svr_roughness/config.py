@@ -1,7 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Sequence
 
 Range = tuple[float, float]
 
@@ -37,14 +37,14 @@ class RoughnessConfig:
     gaussian_mesh: bool = True
 
     @classmethod
-    def surfinspect_defaults(cls) -> "RoughnessConfig":
+    def surfinspect_defaults(cls) -> RoughnessConfig:
         """Return a config matching the canonical SurfInspect/PC_svr2 defaults."""
         return cls()
 
     @classmethod
-    def astm_standard_defaults(cls) -> "RoughnessConfig":
+    def astm_standard_defaults(cls) -> RoughnessConfig:
         """Return a config strictly enforcing the ASTM WK92969 standard parameters.
-        
+
         Note: Appendices X1.3, X2.3, and X3.3 of the draft standard contain a known
         unit-conversion typo for cutoffs (0.001 mm and 0.025 mm). The values used
         here match the intended 1 mm and 25 mm specified in Section 9.1.

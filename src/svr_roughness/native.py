@@ -163,9 +163,7 @@ def _load_library() -> ctypes.CDLL:
     )
 
 
-def analyze_native(
-    points_xyz_mm: npt.ArrayLike, config: RoughnessConfig
-) -> NativeAnalysisResult:
+def analyze_native(points_xyz_mm: npt.ArrayLike, config: RoughnessConfig) -> NativeAnalysisResult:
     """Run the native C++ SurfInspect analysis core.
 
     Returns a NativeAnalysisResult with metrics, variogram, distances,
@@ -220,21 +218,20 @@ def analyze_native(
         grid_origin: np.ndarray | None = None
         if native_result.grid_width > 1 and native_result.grid_height > 1 and native_result.grid_z_mm:
             total = native_result.grid_width * native_result.grid_height
-            grid_flat = np.ctypeslib.as_array(
-                native_result.grid_z_mm, shape=(total,)
-            ).copy()
+            grid_flat = np.ctypeslib.as_array(native_result.grid_z_mm, shape=(total,)).copy()
             # PCL organized clouds store points row-major: height rows x width cols.
             grid_z = grid_flat.reshape((native_result.grid_height, native_result.grid_width))
             if native_result.grid_svr_um:
-                grid_svr_flat = np.ctypeslib.as_array(
-                    native_result.grid_svr_um, shape=(total,)
-                ).copy()
+                grid_svr_flat = np.ctypeslib.as_array(native_result.grid_svr_um, shape=(total,)).copy()
                 grid_svr = grid_svr_flat.reshape((native_result.grid_height, native_result.grid_width))
-            grid_origin = np.array([
-                native_result.grid_origin_x_mm,
-                native_result.grid_origin_y_mm,
-                config.grid_mm,
-            ], dtype=np.float64)
+            grid_origin = np.array(
+                [
+                    native_result.grid_origin_x_mm,
+                    native_result.grid_origin_y_mm,
+                    config.grid_mm,
+                ],
+                dtype=np.float64,
+            )
 
         return NativeAnalysisResult(
             sa_um=float(native_result.sa_um),

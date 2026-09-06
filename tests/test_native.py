@@ -1,5 +1,6 @@
 import unittest
 from pathlib import Path
+
 import numpy as np
 
 from svr_roughness import RoughnessConfig, analyze_file, analyze_points
