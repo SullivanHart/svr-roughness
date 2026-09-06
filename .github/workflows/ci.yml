@@ -46,6 +46,8 @@ jobs:
           pip install numpy scipy pytest
 
       - name: Run unit tests (no native DLL required)
+        env:
+          PYTHONPATH: src
         run: |
           pytest tests/test_config.py tests/test_io.py -v
 
