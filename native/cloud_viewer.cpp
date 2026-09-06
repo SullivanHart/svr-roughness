@@ -2147,23 +2147,21 @@ double checkProximityPoint(pcl::PointCloud<pcl::PointXYZRGBA>::Ptr& inputptr, st
 
 //Order of points to move in a spiral through grid. This way holes can be filled from the inside out.
 //Improves hole filling
-void spiralOrder(std::vector<std::vector<int>>& order, int R, int C)
+void spiralOrder(std::vector<std::pair<int, int>>& order, int R, int C)
 {
-	std::vector<std::vector<bool> > seen(R, std::vector<bool>(C, false));
+	order.clear();
+	order.reserve(static_cast<size_t>(R) * C);
+	std::vector<uint8_t> seen(static_cast<size_t>(R) * C, 0);
 	int dr[] = { 0, 1, 0, -1 };
 	int dc[] = { 1, 0, -1, 0 };
 	int r = 0, c = 0, di = 0;
 	// Iterate from 0 to R * C - 1
-	for (int i = 0; i < R * C; i++) {
-		std::vector<int> bufferPair;
-		bufferPair.push_back(r);
-		bufferPair.push_back(c);
-		order.push_back(bufferPair); //ans.push_back(matrix[r][c]);
-		seen[r][c] = true;
+	for (int i = 0; i < R * C; ++i) {
+		order.emplace_back(r, c);
+		seen[static_cast<size_t>(r) * C + c] = 1;
 		int cr = r + dr[di];
 		int cc = c + dc[di];
-		if (0 <= cr && cr < R && 0 <= cc && cc < C
-			&& !seen[cr][cc]) {
+		if (cr >= 0 && cr < R && cc >= 0 && cc < C && !seen[static_cast<size_t>(cr) * C + cc]) {
 			r = cr;
 			c = cc;
 		}
@@ -2178,17 +2176,24 @@ void spiralOrder(std::vector<std::vector<int>>& order, int R, int C)
 //Fills holes in point cloud after grid creation
 void fillHolesInGrid(pcl::PointCloud<pcl::PointXYZRGBA>::Ptr& inputptr, std::vector<double>& gridParameters) {
 	cout << "fillHolesInGrid start  " << endl;
-	//Search smallest rectangle after with seeds on the outside. Crop point cloud the fill. 
 	int ctr = 0;
-	std::vector<std::vector<int>> order;
-	spiralOrder(order, gridParameters[2], gridParameters[3]);
-	while (checkForMissingPoints(inputptr)) {
+	std::vector<std::pair<int, int>> order;
+	spiralOrder(order, static_cast<int>(gridParameters[2]), static_cast<int>(gridParameters[3]));
+	while (checkForMissingPoints(inputptr) && ctr < 20) {
 		ctr++;
-		for (int i = order.size() - 1; i >= 0; i--) {
-			if (inputptr->at(order[i][0], order[i][1]).z == 1) {
-				inputptr->at(order[i][0], order[i][1]).z = checkProximityPoint(inputptr, gridParameters, order[i][0], order[i][1]);
+		bool anyChanged = false;
+		for (int i = static_cast<int>(order.size()) - 1; i >= 0; --i) {
+			int ix = order[i].first;
+			int iy = order[i].second;
+			if (inputptr->at(ix, iy).z == 1.0f) {
+				double newZ = checkProximityPoint(inputptr, gridParameters, ix, iy);
+				if (newZ != 1.0) {
+					inputptr->at(ix, iy).z = static_cast<float>(newZ);
+					anyChanged = true;
+				}
 			}
 		}
+		if (!anyChanged) break;
 	}
 	cout << "fillHolesInGrid end  " << endl;
 }
@@ -2196,81 +2201,83 @@ void fillHolesInGrid(pcl::PointCloud<pcl::PointXYZRGBA>::Ptr& inputptr, std::vec
 //Crops the point cloud to a rectangle.
 void cropPointCloud(pcl::PointCloud<pcl::PointXYZRGBA>::Ptr& inputptr, std::vector<double>& gridParameters) {
 	cout << "Start  cropPointCloud" << endl;
-	std::vector<std::vector<int>> missingDataMatrix; //0 not missing // 1 missing // 2 missing and connected to the sides.
-	for (int ix = 0; ix < gridParameters[2]; ix++) {
-		std::vector<int > missingDataVector;
-		for (int iy = 0; iy < gridParameters[3]; iy++) {
-			if (inputptr->at(ix, iy).z == 1) {
-				missingDataVector.push_back(1);
-			}
-			else {
-				missingDataVector.push_back(0);
-			}
-		}
-		missingDataMatrix.push_back(missingDataVector);
-	}
-	std::vector<std::vector<int>> order;
-	//Spiral order from outside to inside
-	spiralOrder(order, gridParameters[2], gridParameters[3]);
-	for (int i = 0; i < order.size(); i++) {
-		if (missingDataMatrix[order[i][0]][order[i][1]] == 1) {
-			if (order[i][0] == 0 || order[i][0] == gridParameters[2] - 1 || order[i][1] == 0 || order[i][1] == gridParameters[3] - 1) {
-				missingDataMatrix[order[i][0]][order[i][1]] = 2;
-			}
-			else if (missingDataMatrix[order[i][0] - 1][order[i][1]] == 2 || missingDataMatrix[order[i][0] + 1][order[i][1]] == 2 ||
-				missingDataMatrix[order[i][0]][order[i][1] - 1] == 2 || missingDataMatrix[order[i][0]][order[i][1] + 1] == 2) {
-				missingDataMatrix[order[i][0]][order[i][1]] = 2;
+	const int dimX = static_cast<int>(gridParameters[2]);
+	const int dimY = static_cast<int>(gridParameters[3]);
+	std::vector<uint8_t> missingData(static_cast<size_t>(dimX) * dimY, 0); // 0 not missing // 1 missing // 2 missing and connected to sides
+
+	for (int ix = 0; ix < dimX; ++ix) {
+		for (int iy = 0; iy < dimY; ++iy) {
+			if (inputptr->at(ix, iy).z == 1.0f) {
+				missingData[static_cast<size_t>(ix) * dimY + iy] = 1;
 			}
 		}
 	}
+
+	std::vector<std::pair<int, int>> order;
+	spiralOrder(order, dimX, dimY);
+
+	for (size_t i = 0; i < order.size(); ++i) {
+		int r = order[i].first;
+		int c = order[i].second;
+		size_t idx = static_cast<size_t>(r) * dimY + c;
+		if (missingData[idx] == 1) {
+			if (r == 0 || r == dimX - 1 || c == 0 || c == dimY - 1) {
+				missingData[idx] = 2;
+			}
+			else if (missingData[static_cast<size_t>(r - 1) * dimY + c] == 2 ||
+			         missingData[static_cast<size_t>(r + 1) * dimY + c] == 2 ||
+			         missingData[static_cast<size_t>(r) * dimY + (c - 1)] == 2 ||
+			         missingData[static_cast<size_t>(r) * dimY + (c + 1)] == 2) {
+				missingData[idx] = 2;
+			}
+		}
+	}
+
 	bool missingCornerPointsNotDeleted = true;
 	int xBegin = 0;
-	int xEnd = gridParameters[2];
+	int xEnd = dimX;
 	int yBegin = 0;
-	int yEnd = gridParameters[3];
-	//TODO Create more comments
+	int yEnd = dimY;
+
 	while (missingCornerPointsNotDeleted) {
-		//top
 		missingCornerPointsNotDeleted = false;
-		for (int x = xBegin; x < xEnd; x++) {
-			if (missingDataMatrix[x][yBegin] == 2) {
+		for (int x = xBegin; x < xEnd; ++x) {
+			if (missingData[static_cast<size_t>(x) * dimY + yBegin] == 2) {
 				yBegin++;
 				missingCornerPointsNotDeleted = true;
 				break;
 			}
 		}
-		//right
-		for (int y = yBegin; y < yEnd; y++) {
-			if (missingDataMatrix[xEnd - 1][y] == 2) {
+		for (int y = yBegin; y < yEnd; ++y) {
+			if (missingData[static_cast<size_t>(xEnd - 1) * dimY + y] == 2) {
 				xEnd--;
 				missingCornerPointsNotDeleted = true;
 				break;
 			}
 		}
-		//bottom
-		for (int x = xBegin; x < xEnd; x++) {
-			if (missingDataMatrix[x][yEnd - 1] == 2) {
+		for (int x = xBegin; x < xEnd; ++x) {
+			if (missingData[static_cast<size_t>(x) * dimY + (yEnd - 1)] == 2) {
 				yEnd--;
 				missingCornerPointsNotDeleted = true;
 				break;
 			}
 		}
-		//left
-		for (int y = yBegin; y < yEnd; y++) {
-			if (missingDataMatrix[xBegin][y] == 2) {
+		for (int y = yBegin; y < yEnd; ++y) {
+			if (missingData[static_cast<size_t>(xBegin) * dimY + y] == 2) {
 				xBegin++;
 				missingCornerPointsNotDeleted = true;
 				break;
 			}
 		}
 	}
+
 	pcl::PointCloud<pcl::PointXYZRGBA>::Ptr organizedCloud(new pcl::PointCloud<pcl::PointXYZRGBA>());
 	organizedCloud->width = xEnd - xBegin;
 	organizedCloud->height = yEnd - yBegin;
 	organizedCloud->is_dense = false;
 	organizedCloud->points.resize(organizedCloud->height * organizedCloud->width);
-	for (int ix = xBegin; ix < xEnd; ix++) {
-		for (int iy = yBegin; iy < yEnd; iy++) {
+	for (int ix = xBegin; ix < xEnd; ++ix) {
+		for (int iy = yBegin; iy < yEnd; ++iy) {
 			organizedCloud->at(ix - xBegin, iy - yBegin).x = inputptr->at(ix, iy).x;
 			organizedCloud->at(ix - xBegin, iy - yBegin).y = inputptr->at(ix, iy).y;
 			organizedCloud->at(ix - xBegin, iy - yBegin).z = inputptr->at(ix, iy).z;
@@ -2284,11 +2291,92 @@ void cropPointCloud(pcl::PointCloud<pcl::PointXYZRGBA>::Ptr& inputptr, std::vect
 
 void createDenseGridPointCloud(pcl::PointCloud<pcl::PointXYZRGBA>::Ptr& inputptr, double downsampleValue, boost::shared_ptr< ::pcl::PolygonMesh>  meshPCL, bool stlInput) {
 	cout << "createDenseGridPointCloud Start  " << endl;
-	Polyhedron mesh;
 	if (stlInput == false) {
 		formRemovalPlane(inputptr);
-		mesh = denseMesh(inputptr);
 
+		pcl::PointXYZRGBA minPt, maxPt;
+		pcl::getMinMax3D(*inputptr, minPt, maxPt);
+		int stepsX = ceil((maxPt.x - minPt.x) / downsampleValue) + 1;
+		int stepsY = ceil((maxPt.y - minPt.y) / downsampleValue) + 1;
+
+		std::vector<double> gridParameters;
+		gridParameters.push_back(maxPt.x);
+		gridParameters.push_back(maxPt.y);
+		gridParameters.push_back(stepsX);
+		gridParameters.push_back(stepsY);
+
+		if (stepsX >= 2 && stepsY >= 2) {
+			// Direct 2.5D Elevation Grid Rasterization (replaces slow 3D advancing front meshing & ray tracing)
+			// Bilinear scatter interpolation preserves continuous elevation surface matching ASTM WK92969
+			std::vector<double> sumZw(static_cast<size_t>(stepsX) * stepsY, 0.0);
+			std::vector<double> sumW(static_cast<size_t>(stepsX) * stepsY, 0.0);
+
+			const size_t numPoints = inputptr->size();
+			const double inv_downsample = 1.0 / downsampleValue;
+
+			for (size_t i = 0; i < numPoints; ++i) {
+				const auto& pt = inputptr->points[i];
+				double ux = (pt.x - minPt.x) * inv_downsample;
+				double uy = (pt.y - minPt.y) * inv_downsample;
+				int ix0 = static_cast<int>(std::floor(ux));
+				int iy0 = static_cast<int>(std::floor(uy));
+
+				if (ix0 < 0) ix0 = 0;
+				if (ix0 >= stepsX - 1) ix0 = stepsX - 2;
+				if (iy0 < 0) iy0 = 0;
+				if (iy0 >= stepsY - 1) iy0 = stepsY - 2;
+
+				double fx = ux - ix0;
+				double fy = uy - iy0;
+				if (fx < 0.0) fx = 0.0; else if (fx > 1.0) fx = 1.0;
+				if (fy < 0.0) fy = 0.0; else if (fy > 1.0) fy = 1.0;
+
+				double w00 = (1.0 - fx) * (1.0 - fy);
+				double w10 = fx * (1.0 - fy);
+				double w01 = (1.0 - fx) * fy;
+				double w11 = fx * fy;
+
+				size_t idx00 = static_cast<size_t>(iy0) * stepsX + ix0;
+				size_t idx10 = idx00 + 1;
+				size_t idx01 = idx00 + stepsX;
+				size_t idx11 = idx01 + 1;
+
+				sumZw[idx00] += w00 * pt.z;
+				sumW[idx00] += w00;
+				sumZw[idx10] += w10 * pt.z;
+				sumW[idx10] += w10;
+				sumZw[idx01] += w01 * pt.z;
+				sumW[idx01] += w01;
+				sumZw[idx11] += w11 * pt.z;
+				sumW[idx11] += w11;
+			}
+
+			pcl::PointCloud<pcl::PointXYZRGBA>::Ptr organizedCloud(new pcl::PointCloud<pcl::PointXYZRGBA>());
+			organizedCloud->width = stepsX;
+			organizedCloud->height = stepsY;
+			organizedCloud->is_dense = false;
+			organizedCloud->points.resize(static_cast<size_t>(stepsX) * stepsY);
+
+			for (int iy = 0; iy < stepsY; ++iy) {
+				const size_t row_offset = static_cast<size_t>(iy) * stepsX;
+				const float py = static_cast<float>(minPt.y + iy * downsampleValue);
+				for (int ix = 0; ix < stepsX; ++ix) {
+					const size_t idx = row_offset + ix;
+					auto& pt = organizedCloud->points[idx];
+					pt.x = static_cast<float>(minPt.x + ix * downsampleValue);
+					pt.y = py;
+					if (sumW[idx] > 1e-5) {
+						pt.z = static_cast<float>(sumZw[idx] / sumW[idx]);
+					} else {
+						pt.z = 1.0f; // Missing point sentinel matching SurfInspect convention
+					}
+				}
+			}
+			inputptr->swap(*organizedCloud);
+
+			cropPointCloud(inputptr, gridParameters);
+			fillHolesInGrid(inputptr, gridParameters);
+		}
 	}
 	else {
 		std::vector<pcl::Vertices> mesh_vertices;
@@ -2301,6 +2389,7 @@ void createDenseGridPointCloud(pcl::PointCloud<pcl::PointXYZRGBA>::Ptr& inputptr
 		for (int g = 0; g < mesh_vertices.size(); g++) {
 			triangles.push_back({ (int)mesh_vertices[g].vertices[0],(int)mesh_vertices[g].vertices[1] ,(int)mesh_vertices[g].vertices[2] });
 		}
+		Polyhedron mesh;
 		CGAL::Polygon_mesh_processing::polygon_soup_to_polygon_mesh(points2, triangles, mesh);
 		if (saveClouds) {
 			std::stringstream ss;;
@@ -2309,11 +2398,11 @@ void createDenseGridPointCloud(pcl::PointCloud<pcl::PointXYZRGBA>::Ptr& inputptr
 			f << mesh;
 			f.close();
 		}
+		std::vector<double> gridParameters;
+		samplePointsFromMesh(inputptr, mesh, downsampleValue, gridParameters);
+		cropPointCloud(inputptr, gridParameters);
+		fillHolesInGrid(inputptr, gridParameters);
 	}
-	std::vector<double> gridParameters;
-	samplePointsFromMesh(inputptr, mesh, downsampleValue, gridParameters);
-	cropPointCloud(inputptr, gridParameters);
-	fillHolesInGrid(inputptr, gridParameters);
 	cout << "createDenseGridPointCloud end  " << endl;
 }
 
@@ -2384,22 +2473,31 @@ std::vector<MatrixXf> CreateEvaluationLengthMatrix(double downsampling, int Poin
 }
 
 //calculate Variogram roughness
-double Svr(pcl::PointCloud<pcl::PointXYZRGBA>::Ptr& inputptr, double downsampling, int PointsOnVariogram, double span, std::vector<double>& SvrGauss) {
+double Svr(pcl::PointCloud<pcl::PointXYZRGBA>::Ptr& inputptr, double downsampling, int PointsOnVariogram, double span, std::vector<double>& SvrGauss, double* grid_svr_um) {
 	cout << "Svr start" << endl;
 	std::vector < MatrixXf> EvalMatrix = CreateEvaluationLengthMatrix(downsampling, PointsOnVariogram, span);
 	MatrixXf EMatrix = EvalMatrix[0];
 	int EvalMSize = EMatrix.rows() / 2.0 - 0.5;
 	int height = inputptr->height;
 	int width = inputptr->width;
+	const double inv_span = 1.0 / span;
 
-	// Flat contiguous matrix for per-column accumulation (eliminates 6000 heap allocations and pointer indirections)
-	std::vector<double> colSum(width * PointsOnVariogram, 0.0);
-	std::vector<size_t> colCtr(width * PointsOnVariogram, 0);
+	// Extract compact contiguous elevation buffer (fits entirely in L2/L3 cache)
+	const size_t totalPoints = static_cast<size_t>(width) * height;
+	std::vector<float> grid_z(totalPoints);
+	for (size_t i = 0; i < totalPoints; ++i) {
+		grid_z[i] = inputptr->points[i].z;
+	}
+
+	// Flat contiguous matrix for per-row accumulation
+	std::vector<double> rowSum(static_cast<size_t>(height) * PointsOnVariogram, 0.0);
+	std::vector<size_t> rowCtr(static_cast<size_t>(height) * PointsOnVariogram, 0);
 
 	struct NeighborOffset {
 		int dx;
 		int dy;
 		double dx_sq_dy_sq;
+		int stride_offset;
 	};
 	std::vector<NeighborOffset> activeNeighbors;
 	activeNeighbors.reserve(EMatrix.rows() * EMatrix.cols());
@@ -2410,73 +2508,141 @@ double Svr(pcl::PointCloud<pcl::PointXYZRGBA>::Ptr& inputptr, double downsamplin
 				int dy = -(EvalMSize - y);
 				double dx_m = dx * downsampling;
 				double dy_m = dy * downsampling;
-				activeNeighbors.push_back({ dx, dy, dx_m * dx_m + dy_m * dy_m });
+				activeNeighbors.push_back({ dx, dy, dx_m * dx_m + dy_m * dy_m, dy * width + dx });
 			}
 		}
 	}
 
-	size_t size = inputptr->width;
+	const size_t numNeighbors = activeNeighbors.size();
+	std::vector<int> nb_strides(numNeighbors);
+	std::vector<double> nb_dist_sq(numNeighbors);
+	for (size_t n = 0; n < numNeighbors; ++n) {
+		nb_strides[n] = activeNeighbors[n].stride_offset;
+		nb_dist_sq[n] = activeNeighbors[n].dx_sq_dy_sq;
+	}
+	const int* __restrict p_strides = nb_strides.data();
+	const double* __restrict p_dist_sq = nb_dist_sq.data();
+
 	cout << "Svr parallel for start" << endl;
-	parallel_for(size_t(0), size, [&](size_t i) {
-		double* myColSum = &colSum[i * PointsOnVariogram];
-		size_t* myColCtr = &colCtr[i * PointsOnVariogram];
-		const bool safeX = (static_cast<int>(i) >= EvalMSize && static_cast<int>(i) < width - EvalMSize);
-		for (int m = 0; m < height; m++) {
-			const double z_im = inputptr->at(i, m).z;
-			const bool safeY = (m >= EvalMSize && m < height - EvalMSize);
+	parallel_for(size_t(0), size_t(height), [&](size_t m) {
+		double localRowSum[64] = { 0.0 };
+		size_t localRowCtr[64] = { 0 };
+		const bool safeY = (static_cast<int>(m) >= EvalMSize && static_cast<int>(m) < height - EvalMSize);
+		const size_t row_idx = m * width;
+
+		for (int i = 0; i < width; ++i) {
+			const size_t center_idx = row_idx + i;
+			const float z_center_f = grid_z[center_idx];
+			const double z_im = z_center_f;
+			const bool safeX = (i >= EvalMSize && i < width - EvalMSize);
+
+			double pixel_sum_sq_mm = 0.0;
+			size_t pixel_count = 0;
 
 			if (safeX && safeY) {
-				// Fast path: inner region away from edges (no bounds clamping or branch overhead)
-				for (const auto& nb : activeNeighbors) {
-					int ii = static_cast<int>(i) + nb.dx;
-					int mm = m + nb.dy;
-					double dz = z_im - inputptr->at(ii, mm).z;
-					double dist = std::sqrt(nb.dx_sq_dy_sq + dz * dz);
-					int k = static_cast<int>(std::floor(dist / span));
-					if (k > -1 && k < PointsOnVariogram) {
-						double diff = 1000.0 * dz;
-						myColSum[k] += diff * diff;
-						myColCtr[k] += 1;
+				// Fast path: inner region away from edges (L1-resident SoA streams, 2-way pipelined FPU)
+				size_t n = 0;
+				for (; n + 1 < numNeighbors; n += 2) {
+					const float nz0 = grid_z[center_idx + p_strides[n]];
+					const float nz1 = grid_z[center_idx + p_strides[n + 1]];
+
+					const double dz0 = z_im - nz0;
+					const double dz1 = z_im - nz1;
+
+					const double diff0 = 1000.0 * dz0;
+					const double diff1 = 1000.0 * dz1;
+
+					const double diff_sq0 = diff0 * diff0;
+					const double diff_sq1 = diff1 * diff1;
+
+					pixel_sum_sq_mm += (diff_sq0 + diff_sq1);
+
+					const double dist0 = std::sqrt(p_dist_sq[n] + dz0 * dz0);
+					const double dist1 = std::sqrt(p_dist_sq[n + 1] + dz1 * dz1);
+
+					const int k0 = static_cast<int>(dist0 * inv_span);
+					const int k1 = static_cast<int>(dist1 * inv_span);
+
+					if (k0 >= 0 && k0 < PointsOnVariogram) {
+						localRowSum[k0] += diff_sq0;
+						localRowCtr[k0] += 1;
+					}
+					if (k1 >= 0 && k1 < PointsOnVariogram) {
+						localRowSum[k1] += diff_sq1;
+						localRowCtr[k1] += 1;
 					}
 				}
+				if (n < numNeighbors) {
+					const float nz = grid_z[center_idx + p_strides[n]];
+					const double dz = z_im - nz;
+					const double diff = 1000.0 * dz;
+					const double diff_sq = diff * diff;
+					pixel_sum_sq_mm += diff_sq;
+					const double dist = std::sqrt(p_dist_sq[n] + dz * dz);
+					const int k = static_cast<int>(dist * inv_span);
+					if (k >= 0 && k < PointsOnVariogram) {
+						localRowSum[k] += diff_sq;
+						localRowCtr[k] += 1;
+					}
+				}
+				pixel_count = numNeighbors;
 			} else {
 				// Boundary path: respects exact original minXGrid/maxXGrid/minYGrid/maxYGrid range limits
 				int minXGrid = 0, maxXGrid = EMatrix.rows(), minYGrid = 0, maxYGrid = EMatrix.rows();
-				if (static_cast<int>(i) - EvalMSize < 0) {
-					minXGrid = abs(static_cast<int>(i) - EvalMSize);
+				if (i - EvalMSize < 0) {
+					minXGrid = abs(i - EvalMSize);
 				}
-				else if (abs(static_cast<int>(i) - (width - 1)) < EvalMSize) {
-					int distToEdge = abs(static_cast<int>(i) - (width - 1));
+				else if (abs(i - (width - 1)) < EvalMSize) {
+					int distToEdge = abs(i - (width - 1));
 					maxXGrid = (EMatrix.rows() - (EvalMSize - distToEdge));
 				}
-				if (m - EvalMSize < 0) {
-					minYGrid = abs(m - EvalMSize);
+				if (static_cast<int>(m) - EvalMSize < 0) {
+					minYGrid = abs(static_cast<int>(m) - EvalMSize);
 				}
-				else if (abs(m - (height - 1)) < EvalMSize) {
-					int distToEdge = abs(m - (height - 1));
+				else if (abs(static_cast<int>(m) - (height - 1)) < EvalMSize) {
+					int distToEdge = abs(static_cast<int>(m) - (height - 1));
 					maxYGrid = (EMatrix.rows() - (EvalMSize - distToEdge));
 				}
-				for (int x = minXGrid; x < maxXGrid - 1; x++) {
+				for (int x = minXGrid; x < maxXGrid - 1; ++x) {
 					int dx = -(EvalMSize - x);
 					double dx_m = dx * downsampling;
-					int ii = static_cast<int>(i) + dx;
-					for (int y = minYGrid; y < maxYGrid - 1; y++) {
+					int ii = i + dx;
+					for (int y = minYGrid; y < maxYGrid - 1; ++y) {
 						if (EMatrix(x, y) != -1) {
 							int dy = -(EvalMSize - y);
 							double dy_m = dy * downsampling;
-							int mm = m + dy;
-							double dz = z_im - inputptr->at(ii, mm).z;
-							double dist = std::sqrt(dx_m * dx_m + dy_m * dy_m + dz * dz);
-							int k = static_cast<int>(std::floor(dist / span));
-							if (k > -1 && k < PointsOnVariogram) {
-								double diff = 1000.0 * dz;
-								myColSum[k] += diff * diff;
-								myColCtr[k] += 1;
+							int mm = static_cast<int>(m) + dy;
+							const float nz = grid_z[mm * width + ii];
+							const double dz = z_im - nz;
+							const double diff = 1000.0 * dz;
+							const double diff_sq = diff * diff;
+
+							if (grid_svr_um) {
+								pixel_sum_sq_mm += diff_sq;
+								pixel_count++;
+							}
+
+							const double dist = std::sqrt(dx_m * dx_m + dy_m * dy_m + dz * dz);
+							const int k = static_cast<int>(dist * inv_span);
+							if (k >= 0 && k < PointsOnVariogram) {
+								localRowSum[k] += diff_sq;
+								localRowCtr[k] += 1;
 							}
 						}
 					}
 				}
 			}
+
+			if (grid_svr_um) {
+				grid_svr_um[center_idx] = (pixel_count > 0)
+					? std::sqrt((pixel_sum_sq_mm * 1e6) / pixel_count)
+					: std::numeric_limits<double>::quiet_NaN();
+			}
+		}
+
+		for (int k = 0; k < PointsOnVariogram; ++k) {
+			rowSum[m * PointsOnVariogram + k] = localRowSum[k];
+			rowCtr[m * PointsOnVariogram + k] = localRowCtr[k];
 		}
 	});
 	cout << "Svr parallel for end" << endl;
@@ -2487,9 +2653,9 @@ double Svr(pcl::PointCloud<pcl::PointXYZRGBA>::Ptr& inputptr, double downsamplin
 	double CtrAll = 0;
 	//calculate roughness from sum and counter.
 	for (int k = 0; k < PointsOnVariogram; k++) {
-		for (int i = 0; i < inputptr->width; i++) {
-			sumVec[k] += colSum[i * PointsOnVariogram + k];
-			CtrVec[k] += colCtr[i * PointsOnVariogram + k];
+		for (int m = 0; m < height; m++) {
+			sumVec[k] += rowSum[m * PointsOnVariogram + k];
+			CtrVec[k] += rowCtr[m * PointsOnVariogram + k];
 		}
 		if (CtrVec[k] > 0) {
 			varVec[k] = sqrt((1.0 / (2.0 * CtrVec[k])) * sumVec[k]);
@@ -2508,7 +2674,7 @@ double Svr(pcl::PointCloud<pcl::PointXYZRGBA>::Ptr& inputptr, double downsamplin
 
 //This method calculates the roughness parameters Sa, Sq and Svr for a gauss filtered point cloud grid. 
 void roughnessCalculation(pcl::PointCloud<pcl::PointXYZRGBA>::Ptr& inputptr, double downsampling, int PointsOnVariogram, double span,
-	std::vector<double>& SvrGauss, std::vector<double>& SaSqSvrGauss, int RoughnessParameterSaSqSvr, bool OverWriteParameters) {
+	std::vector<double>& SvrGauss, std::vector<double>& SaSqSvrGauss, int RoughnessParameterSaSqSvr, bool OverWriteParameters, double* grid_svr_um) {
 	cout << "roughnessCalculation Start" << endl;
 	double sa = 0;
 	double sq = 0;
@@ -2520,7 +2686,7 @@ void roughnessCalculation(pcl::PointCloud<pcl::PointXYZRGBA>::Ptr& inputptr, dou
 		sq = Sq(inputptr) * 1000000;
 	}
 	if (RoughnessParameterSaSqSvr == 2 || OverWriteParameters == true) {
-		svr = Svr(inputptr, downsampling, PointsOnVariogram, span, SvrGauss) * 1000;
+		svr = Svr(inputptr, downsampling, PointsOnVariogram, span, SvrGauss, grid_svr_um) * 1000;
 	}
 	SaSqSvrGauss.push_back(sa);
 	SaSqSvrGauss.push_back(sq);

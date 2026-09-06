@@ -73,21 +73,36 @@ class NativeAnalysisResult(NamedTuple):
     grid_origin_mm: np.ndarray | None
 
 
+_LOADED_LIBRARY: ctypes.CDLL | None = None
+
+
 def _library_candidates() -> list[Path]:
     override = os.environ.get("SVR_ROUGHNESS_NATIVE")
     root = Path(__file__).resolve().parent / "native"
-    candidates = [
-        root / "SurfInspectNative.dll",
-        root / "libSurfInspectNative.so",
-        root / "libSurfInspectNative.dylib",
-    ]
-    # Editable installs keep the compiled library in the source checkout.
     source_root = Path(__file__).resolve().parents[2]
+    build_dll = source_root / "native" / "build" / "Release" / "SurfInspectNative.dll"
+    packaged_dll = root / "SurfInspectNative.dll"
+
+    candidates: list[Path] = []
+    # Always prioritize the freshest compiled binary between build/Release and packaged copy
+    if build_dll.is_file() and packaged_dll.is_file():
+        if build_dll.stat().st_mtime >= packaged_dll.stat().st_mtime:
+            candidates.extend([build_dll, packaged_dll])
+        else:
+            candidates.extend([packaged_dll, build_dll])
+    elif build_dll.is_file():
+        candidates.append(build_dll)
+    elif packaged_dll.is_file():
+        candidates.append(packaged_dll)
+
     candidates.extend(
         [
             source_root / "native" / "build" / "Release" / "SurfInspectNative.dll",
+            root / "SurfInspectNative.dll",
             source_root / "native" / "build" / "libSurfInspectNative.so",
             source_root / "native" / "build" / "libSurfInspectNative.dylib",
+            root / "libSurfInspectNative.so",
+            root / "libSurfInspectNative.dylib",
         ]
     )
     if override:
@@ -96,6 +111,10 @@ def _library_candidates() -> list[Path]:
 
 
 def _load_library() -> ctypes.CDLL:
+    global _LOADED_LIBRARY
+    if _LOADED_LIBRARY is not None:
+        return _LOADED_LIBRARY
+
     errors: list[str] = []
     for candidate in _library_candidates():
         if candidate.is_file():
@@ -104,9 +123,16 @@ def _load_library() -> ctypes.CDLL:
                     # Python 3.8+ does not search the extension directory for
                     # dependent DLLs unless it is explicitly registered.
                     search_dirs = [candidate.parent]
-                    package_bin = candidate.parent.parent.parent / "vcpkg_installed" / "x64-windows" / "bin"
-                    if package_bin.is_dir():
-                        search_dirs.append(package_bin)
+                    # Walk up ancestors to find vcpkg_installed/x64-windows/bin
+                    curr = candidate.parent
+                    for _ in range(5):
+                        vcpkg_bin = curr / "vcpkg_installed" / "x64-windows" / "bin"
+                        if vcpkg_bin.is_dir():
+                            search_dirs.append(vcpkg_bin)
+                            break
+                        if curr == curr.parent:
+                            break
+                        curr = curr.parent
                     for directory in search_dirs:
                         _DLL_DIRECTORY_HANDLES.append(os.add_dll_directory(str(directory)))
                 library = ctypes.WinDLL(str(candidate)) if os.name == "nt" else ctypes.CDLL(str(candidate))
@@ -121,6 +147,7 @@ def _load_library() -> ctypes.CDLL:
                 library.si_free_result.restype = None
                 library.si_last_error.argtypes = []
                 library.si_last_error.restype = ctypes.c_char_p
+                _LOADED_LIBRARY = library
                 return library
             except OSError as exc:
                 errors.append(f"{candidate}: {exc}")

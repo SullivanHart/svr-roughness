@@ -62,9 +62,11 @@ extern "C" int si_analyze_points(const double* xyz, std::size_t point_count,
             throw std::runtime_error("SurfInspect native core requires at least 20 points");
         }
 
+        auto t_start = std::chrono::high_resolution_clock::now();
         pcl::PointXYZRGBA centroid;
         CenterPointCloudAndAdjustUnits(cloud, centroid, true, false);
         VoxelGridDownsample(cloud, config->voxel_size_m);
+        auto t_voxel = std::chrono::high_resolution_clock::now();
 
         pcl::PointCloud<pcl::PointXYZRGBA>::Ptr combined(
             new pcl::PointCloud<pcl::PointXYZRGBA>);
@@ -80,11 +82,38 @@ extern "C" int si_analyze_points(const double* xyz, std::size_t point_count,
         if (config->gaussian_mesh != 0) {
             boost::shared_ptr<pcl::PolygonMesh> inputMesh;
             createDenseGridPointCloud(cloud, config->voxel_size_m, inputMesh, false);
+            auto t_grid = std::chrono::high_resolution_clock::now();
             filterShortLong(cloud, config->voxel_size_m, false, dir, file,
                             static_cast<float>(config->short_cutoff_m),
                             static_cast<float>(config->long_cutoff_m));
+            auto t_filter = std::chrono::high_resolution_clock::now();
+            double* grid_svr_ptr = nullptr;
+            if (cloud->width > 1 && cloud->height > 1 && cloud->width * cloud->height == cloud->size()) {
+                result->grid_width = cloud->width;
+                result->grid_height = cloud->height;
+                result->grid_origin_x_mm = cloud->points[0].x * 1000.0;
+                result->grid_origin_y_mm = cloud->points[0].y * 1000.0;
+                result->grid_z_mm = new double[cloud->size()];
+                result->grid_svr_um = new double[cloud->size()];
+                grid_svr_ptr = result->grid_svr_um;
+                for (std::size_t i = 0; i < cloud->size(); ++i) {
+                    if (std::abs(cloud->points[i].z) > 10.0f) {
+                        result->grid_z_mm[i] = std::numeric_limits<double>::quiet_NaN();
+                    } else {
+                        result->grid_z_mm[i] = cloud->points[i].z * 1000.0;
+                    }
+                }
+            }
+
             roughnessCalculation(cloud, config->voxel_size_m, config->variogram_points,
-                                 config->variogram_span_m, variogram, metrics, 2, true);
+                                 config->variogram_span_m, variogram, metrics, 2, true, grid_svr_ptr);
+            auto t_svr = std::chrono::high_resolution_clock::now();
+
+            auto ms = [](auto d) { return std::chrono::duration<double, std::milli>(d).count(); };
+            std::cout << ">>> TIMINGS: VoxelGrid: " << ms(t_voxel - t_start) << " ms | "
+                      << "ElevationGrid: " << ms(t_grid - t_voxel) << " ms | "
+                      << "GaussFilter: " << ms(t_filter - t_grid) << " ms | "
+                      << "Variogram+Heatmap: " << ms(t_svr - t_filter) << " ms" << std::endl;
             if (metrics.size() < 3) {
                 throw std::runtime_error("SurfInspect grid roughness calculation failed");
             }
@@ -137,96 +166,7 @@ extern "C" int si_analyze_points(const double* xyz, std::size_t point_count,
             result->signed_distances_mm[i] = distances[i] * 1000.0;
         }
 
-        if (cloud->width > 1 && cloud->height > 1 && cloud->width * cloud->height == cloud->size()) {
-            result->grid_width = cloud->width;
-            result->grid_height = cloud->height;
-            result->grid_origin_x_mm = cloud->points[0].x * 1000.0;
-            result->grid_origin_y_mm = cloud->points[0].y * 1000.0;
-            result->grid_z_mm = new double[cloud->size()];
-            for (std::size_t i = 0; i < cloud->size(); ++i) {
-                // If it's a hole filler flag or huge number, output nan
-                if (std::abs(cloud->points[i].z) > 10.0) {
-                    result->grid_z_mm[i] = std::numeric_limits<double>::quiet_NaN();
-                } else {
-                    result->grid_z_mm[i] = cloud->points[i].z * 1000.0;
-                }
-            }
-
-            // High-speed parallel local S_VR spatial variogram map (instant in C++)
-            result->grid_svr_um = new double[cloud->size()];
-            const int w = static_cast<int>(cloud->width);
-            const int h = static_cast<int>(cloud->height);
-            const double max_dist_m = config->variogram_points * config->variogram_span_m;
-            const double max_dist_sq = max_dist_m * max_dist_m;
-            const int radius_cells = (config->voxel_size_m > 0.0)
-                ? static_cast<int>(std::ceil(max_dist_m / config->voxel_size_m))
-                : 25;
-            const double pitch_m = config->voxel_size_m;
-
-            struct LocalOffset {
-                int dr;
-                int dc;
-            };
-            std::vector<LocalOffset> active_offsets;
-            for (int dr = -radius_cells; dr <= radius_cells; ++dr) {
-                for (int dc = -radius_cells; dc <= radius_cells; ++dc) {
-                    double dist_sq = (dr * dr + dc * dc) * pitch_m * pitch_m;
-                    if (dist_sq > 0.0 && dist_sq <= max_dist_sq) {
-                        active_offsets.push_back({ dr, dc });
-                    }
-                }
-            }
-
-            tbb::parallel_for(0, h, [&](int r) {
-                const bool safe_r = (r >= radius_cells && r < h - radius_cells);
-                for (int c = 0; c < w; ++c) {
-                    const int idx = r * w + c;
-                    const double center_z = cloud->points[idx].z;
-                    if (std::abs(center_z) > 10.0 || std::isnan(center_z)) {
-                        result->grid_svr_um[idx] = std::numeric_limits<double>::quiet_NaN();
-                        continue;
-                    }
-
-                    double sum_sq = 0.0;
-                    std::size_t count = 0;
-
-                    if (safe_r && c >= radius_cells && c < w - radius_cells) {
-                        // Fast interior branch: no bounds checks needed
-                        for (const auto& off : active_offsets) {
-                            const int n_idx = (r + off.dr) * w + (c + off.dc);
-                            const double nz = cloud->points[n_idx].z;
-                            if (std::abs(nz) <= 10.0 && !std::isnan(nz)) {
-                                const double diff_um = (center_z - nz) * 1000000.0;
-                                sum_sq += diff_um * diff_um;
-                                count++;
-                            }
-                        }
-                    } else {
-                        // Boundary branch: check perimeter limits
-                        for (const auto& off : active_offsets) {
-                            const int nr = r + off.dr;
-                            const int nc = c + off.dc;
-                            if (nr >= 0 && nr < h && nc >= 0 && nc < w) {
-                                const int n_idx = nr * w + nc;
-                                const double nz = cloud->points[n_idx].z;
-                                if (std::abs(nz) <= 10.0 && !std::isnan(nz)) {
-                                    const double diff_um = (center_z - nz) * 1000000.0;
-                                    sum_sq += diff_um * diff_um;
-                                    count++;
-                                }
-                            }
-                        }
-                    }
-
-                    if (count > 0) {
-                        result->grid_svr_um[idx] = std::sqrt(sum_sq / count);
-                    } else {
-                        result->grid_svr_um[idx] = std::numeric_limits<double>::quiet_NaN();
-                    }
-                }
-            });
-        } else {
-            result->grid_width = 0;
+        if (result->grid_width == 0) {
             result->grid_height = 0;
             result->grid_origin_x_mm = 0;
             result->grid_origin_y_mm = 0;

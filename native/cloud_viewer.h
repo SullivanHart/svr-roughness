@@ -270,7 +270,7 @@ void determinePriorities(pcl::PointCloud<pcl::PointXYZRGBA>::Ptr& inputptr, int 
 
 double checkProximityPoint(pcl::PointCloud<pcl::PointXYZRGBA>::Ptr& inputptr, std::vector<double>& gridParameters, int ix, int iy);
 
-void spiralOrder(std::vector<std::vector<int>>& order, int R, int C);
+void spiralOrder(std::vector<std::pair<int, int>>& order, int R, int C);
 
 void fillHolesInGrid(pcl::PointCloud<pcl::PointXYZRGBA>::Ptr& inputptr, std::vector<double>& gridParameters);
 
@@ -288,10 +288,10 @@ double Sq(pcl::PointCloud<pcl::PointXYZRGBA>::Ptr& inputptr);
 
 std::vector<MatrixXf> CreateEvaluationLengthMatrix(double downsampling, int PointsOnVariogram, double span);
 
-double Svr(pcl::PointCloud<pcl::PointXYZRGBA>::Ptr& inputptr, double downsampling, int PointsOnVariogram, double span, std::vector<double>& SvrGauss);
+double Svr(pcl::PointCloud<pcl::PointXYZRGBA>::Ptr& inputptr, double downsampling, int PointsOnVariogram, double span, std::vector<double>& SvrGauss, double* grid_svr_um = nullptr);
 
 void roughnessCalculation(pcl::PointCloud<pcl::PointXYZRGBA>::Ptr& inputptr, double downsampling, int PointsOnVariogram, double span,
-	std::vector<double>& SvrGauss, std::vector<double>& SaSqSvrGauss, int RoughnessParameterSaSqSvr, bool OverWriteParameters);
+	std::vector<double>& SvrGauss, std::vector<double>& SaSqSvrGauss, int RoughnessParameterSaSqSvr, bool OverWriteParameters, double* grid_svr_um = nullptr);
 
 double calculateSurfaceRoughnessOfPointCloud(std::string filepath);
 

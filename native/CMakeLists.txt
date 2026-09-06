@@ -52,6 +52,11 @@ add_library(SurfInspectNative SHARED
 )
 
 target_compile_definitions(SurfInspectNative PRIVATE SURFINSPECT_NATIVE_EXPORTS NOMINMAX WIN32_LEAN_AND_MEAN BOOST_BIND_GLOBAL_PLACEHOLDERS CGAL_SILENCE_DEPRECATION_WARNINGS)
+if(MSVC)
+    target_compile_options(SurfInspectNative PRIVATE /O2 /Oi /Ot)
+else()
+    target_compile_options(SurfInspectNative PRIVATE -O3)
+endif()
 target_include_directories(SurfInspectNative PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${PCL_INCLUDE_DIRS}

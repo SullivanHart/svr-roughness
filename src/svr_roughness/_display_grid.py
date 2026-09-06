@@ -16,8 +16,10 @@ def fit_plane_basis(points: npt.ArrayLike) -> PlaneFit:
     points_array = np.asarray(points, dtype=np.float64)
     centroid = points_array.mean(axis=0)
     centered = points_array - centroid
-    _, _, vh = np.linalg.svd(centered, full_matrices=False)
-    normal = vh[-1]
+    # Fast 3x3 covariance eigen-decomposition (O(N) single pass vs O(N*3^2) full SVD)
+    cov = (centered.T @ centered) / max(len(points_array) - 1, 1)
+    _, eigvecs = np.linalg.eigh(cov)
+    normal = eigvecs[:, 0]
     if normal[2] < 0:
         normal = -normal
     normal /= np.linalg.norm(normal)
