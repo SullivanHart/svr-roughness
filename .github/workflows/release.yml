@@ -104,10 +104,10 @@ jobs:
         shell: bash
         run: echo "VCPKG_BINARY_SOURCES=clear;x-gha,readwrite" >> $GITHUB_ENV
 
-      # ── Cache the fully installed vcpkg tree ──
-      - name: Cache vcpkg installed directory
+      # ── Restore / Save the installed vcpkg tree ──
+      - name: Restore vcpkg installed directory
         id: cache-vcpkg
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: native/vcpkg_installed
           key: windows-vcpkg-rel-v1-${{ hashFiles('native/vcpkg.json') }}
@@ -118,6 +118,13 @@ jobs:
         if: steps.cache-vcpkg.outputs.cache-hit != 'true'
         run: |
           vcpkg install --triplet=x64-windows-release --x-manifest-root=native --x-install-root=native/vcpkg_installed
+
+      - name: Save vcpkg cache immediately
+        if: steps.cache-vcpkg.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: native/vcpkg_installed
+          key: windows-vcpkg-rel-v1-${{ hashFiles('native/vcpkg.json') }}
 
       # ── Python & build tools ──
       - name: Set up Python
