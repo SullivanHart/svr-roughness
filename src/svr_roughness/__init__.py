@@ -1,11 +1,6 @@
 """Surface roughness analysis for scanner point clouds."""
 
-try:
-    from ._version import version as __version__
-except ImportError:
-    from importlib.metadata import version as _v
-
-    __version__ = _v("svr-roughness")
+from ._version import version as __version__
 
 
 from ._display_grid import svr_map

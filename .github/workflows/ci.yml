@@ -36,6 +36,8 @@ jobs:
     needs: lint
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # full history so setuptools-scm can read tags
 
       - uses: actions/setup-python@v5
         with:
@@ -43,7 +45,11 @@ jobs:
 
       - name: Install test dependencies
         run: |
-          pip install numpy scipy pytest
+          pip install numpy scipy pytest setuptools-scm
+
+      - name: Generate _version.py from git tags
+        run: |
+          python -m setuptools_scm
 
       - name: Run unit tests (no native DLL required)
         env:
@@ -57,6 +63,8 @@ jobs:
     needs: lint
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Install C++ dependencies
         run: |
@@ -69,8 +77,7 @@ jobs:
           python-version: '3.13'
 
       - name: Install build tools
-        run: pip install build scikit-build-core
+        run: pip install build scikit-build-core setuptools-scm
 
       - name: Build wheel (verify it compiles)
         run: python -m build --wheel
-

@@ -35,6 +35,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Install Linux C++ dependencies
         run: |
@@ -87,6 +89,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       # ── vcpkg binary caching via GitHub Actions native cache ──
       - name: Export GitHub Actions cache environment
@@ -140,9 +144,14 @@ jobs:
       # ── Vendor runtime DLLs into the wheel ──
       - name: Repair wheel with delvewheel
         run: |
-          delvewheel repair dist/*.whl -w repaired/ --add-path native/vcpkg_installed/x64-windows-release/bin
+          delvewheel repair dist/*.whl -w repaired/ --add-path native/vcpkg_installed/x64-windows-release/bin --lib-sdir native --no-mangle -v
           Remove-Item dist/*.whl
           Move-Item repaired/*.whl dist/
+
+      - name: Verify vendored DLLs
+        run: |
+          pip install wheel-inspect
+          python -c "import zipfile, sys; whl = list(__import__('pathlib').Path('dist').glob('*.whl'))[0]; zf = zipfile.ZipFile(whl); dlls = [n for n in zf.namelist() if n.endswith('.dll')]; print(f'DLLs in wheel ({len(dlls)}):'); [print(f'  {d}') for d in sorted(dlls)]; sys.exit(0 if len(dlls) > 1 else 1)"
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -164,6 +173,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Install macOS C++ dependencies
         run: brew install cmake cgal pcl boost tbb eigen
