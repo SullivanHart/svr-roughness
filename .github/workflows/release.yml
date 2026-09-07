@@ -141,7 +141,9 @@ jobs:
       # Manifest mode is OFF because the pre-install step already populated
       # native/vcpkg_installed. CMakeLists.txt adds that path to CMAKE_PREFIX_PATH.
       - name: Build Windows wheel
-        run: python -m build --wheel --no-isolation -Ccmake.define.VCPKG_MANIFEST_MODE=OFF
+        env:
+          CMAKE_ARGS: "-DVCPKG_MANIFEST_MODE=OFF"
+        run: python -m build --wheel --no-isolation --config-setting=cmake.define.VCPKG_MANIFEST_MODE=OFF
 
       # ── Vendor runtime DLLs into the wheel ──
       - name: Repair wheel with delvewheel
