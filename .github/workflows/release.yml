@@ -138,8 +138,10 @@ jobs:
           pip install build scikit-build-core delvewheel setuptools-scm
 
       # ── Build ──
+      # Manifest mode is OFF because the pre-install step already populated
+      # native/vcpkg_installed. CMakeLists.txt adds that path to CMAKE_PREFIX_PATH.
       - name: Build Windows wheel
-        run: python -m build --wheel --no-build-isolation
+        run: python -m build --wheel --no-build-isolation -Ccmake.define.VCPKG_MANIFEST_MODE=OFF
 
       # ── Vendor runtime DLLs into the wheel ──
       - name: Repair wheel with delvewheel
