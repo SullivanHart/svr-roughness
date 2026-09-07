@@ -1,9 +1,7 @@
 """Surface roughness analysis for scanner point clouds."""
 
-from ._version import version as __version__
-
-
 from ._display_grid import svr_map
+from ._version import version as __version__
 from .analyze import (
     analyze_file,
     analyze_ply,
