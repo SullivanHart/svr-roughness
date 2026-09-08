@@ -155,7 +155,8 @@ jobs:
       # ── Vendor runtime DLLs into the wheel ──
       - name: Repair wheel with delvewheel
         run: |
-          delvewheel repair dist/*.whl -w repaired/ --add-path native/vcpkg_installed/x64-windows-release/bin --lib-sdir native --no-mangle -v
+          New-Item -ItemType Directory -Force -Path repaired
+          delvewheel repair dist/*.whl -w repaired/ --add-path native/vcpkg_installed/x64-windows-release/bin --no-mangle-all -v
           Remove-Item dist/*.whl
           Move-Item repaired/*.whl dist/
 

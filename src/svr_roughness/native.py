@@ -123,13 +123,20 @@ def _load_library() -> ctypes.CDLL:
                     # Python 3.8+ does not search the extension directory for
                     # dependent DLLs unless it is explicitly registered.
                     search_dirs = [candidate.parent]
-                    # Walk up ancestors to find vcpkg_installed/x64-windows/bin
+                    # Also look for delvewheel vendored library folders
+                    for parent_level in (candidate.parent, candidate.parent.parent, candidate.parent.parent.parent):
+                        for lib_folder in ("svr_roughness.libs", ".libs", "libs"):
+                            p = parent_level / lib_folder
+                            if p.is_dir() and p not in search_dirs:
+                                search_dirs.append(p)
+                    # Walk up ancestors to find vcpkg_installed/*/bin (local/dev builds)
                     curr = candidate.parent
                     for _ in range(5):
-                        vcpkg_bin = curr / "vcpkg_installed" / "x64-windows" / "bin"
-                        if vcpkg_bin.is_dir():
-                            search_dirs.append(vcpkg_bin)
-                            break
+                        for triplet in ("x64-windows-release", "x64-windows"):
+                            vcpkg_bin = curr / "vcpkg_installed" / triplet / "bin"
+                            if vcpkg_bin.is_dir() and vcpkg_bin not in search_dirs:
+                                search_dirs.append(vcpkg_bin)
+                                break
                         if curr == curr.parent:
                             break
                         curr = curr.parent

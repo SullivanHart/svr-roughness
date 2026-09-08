@@ -49,7 +49,7 @@ jobs:
 
       - name: Generate _version.py from git tags
         run: |
-          python -m setuptools_scm
+          python -c "import setuptools_scm; setuptools_scm.get_version(write_to='src/svr_roughness/_version.py')"
 
       - name: Run unit tests (no native DLL required)
         env:
