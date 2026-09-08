@@ -1,4 +1,4 @@
-name: Release — Build & Publish Multi-Platform Wheels
+name: Release — Build & Publish Universal Wheel
 
 on:
   push:
@@ -12,271 +12,77 @@ concurrency:
 
 jobs:
   # ═══════════════════════════════════════════════════════════════════
-  #  Linux Wheels (x86_64 + aarch64)
+  #  Build Universal Wheel & sdist
   # ═══════════════════════════════════════════════════════════════════
-  build_linux_wheels:
-    name: Build Linux Wheel (${{ matrix.arch }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-22.04
-            arch: x86_64
-          - os: ubuntu-24.04-arm
-            arch: aarch64
-
-    env:
-      CMAKE_C_COMPILER_LAUNCHER: ccache
-      CMAKE_CXX_COMPILER_LAUNCHER: ccache
-      CCACHE_BASEDIR: ${{ github.workspace }}
-      CCACHE_SLOPPINESS: time_macros,include_file_mtime,file_stat_matches
-
+  build:
+    name: Build Universal Wheel & sdist
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Install Linux C++ dependencies
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq cmake build-essential \
-            libpcl-dev libcgal-dev libboost-system-dev libboost-filesystem-dev \
-            libtbb-dev libeigen3-dev patchelf
-
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-          cache: 'pip'
-
-      - name: Setup ccache
-        uses: hendrikmuhs/ccache-action@v1.2
-        with:
-          key: linux-${{ matrix.arch }}-ccache
-          max-size: 500M
-          save-always: true
 
       - name: Install build tools
-        run: pip install build auditwheel patchelf scikit-build-core
+        run: pip install build setuptools-scm
 
       - name: Build wheel and sdist
         run: python -m build
 
-      - name: Repair wheel (vendor shared libs → manylinux)
-        run: |
-          auditwheel repair dist/*.whl -w dist/
-          rm -f dist/*-linux_*.whl
-
-      - name: Upload artifacts
+      - name: Upload dist artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: dist-linux-${{ matrix.arch }}
-          path: dist/
+          name: dist
+          path: dist/*
 
   # ═══════════════════════════════════════════════════════════════════
-  #  Windows Wheel (x86_64)
+  #  Cross-Platform & Multi-Python Matrix Tests
   # ═══════════════════════════════════════════════════════════════════
-  build_windows_wheel:
-    name: Build Windows Wheel (x86_64)
-    runs-on: windows-2022
-    env:
-      CMAKE_TOOLCHAIN_FILE: 'C:/vcpkg/scripts/buildsystems/vcpkg.cmake'
-      VCPKG_TARGET_TRIPLET: 'x64-windows-release'
-      VCPKG_INSTALLED_DIR: '${{ github.workspace }}/native/vcpkg_installed'
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      # ── vcpkg binary caching via GitHub Actions native cache ──
-      - name: Export GitHub Actions cache environment
-        uses: actions/github-script@v7
-        with:
-          script: |
-            core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
-            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
-
-      - name: Enable vcpkg binary cache (x-gha)
-        shell: bash
-        run: echo "VCPKG_BINARY_SOURCES=clear;x-gha,readwrite" >> $GITHUB_ENV
-
-      # ── Restore / Save the installed vcpkg tree ──
-      - name: Restore vcpkg installed directory
-        id: cache-vcpkg
-        uses: actions/cache/restore@v4
-        with:
-          path: native/vcpkg_installed
-          key: windows-vcpkg-rel-v1-${{ hashFiles('native/vcpkg.json') }}
-          restore-keys: |
-            windows-vcpkg-rel-v1-
-
-      - name: Install vcpkg dependencies (release only, skip if cached)
-        if: steps.cache-vcpkg.outputs.cache-hit != 'true'
-        run: |
-          vcpkg install --triplet=x64-windows-release --x-manifest-root=native --x-install-root=native/vcpkg_installed
-
-      - name: Save vcpkg cache immediately
-        if: steps.cache-vcpkg.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
-        with:
-          path: native/vcpkg_installed
-          key: windows-vcpkg-rel-v1-${{ hashFiles('native/vcpkg.json') }}
-
-      # ── Python & build tools ──
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.13'
-          cache: 'pip'
-
-      - name: Setup ccache
-        uses: hendrikmuhs/ccache-action@v1.2
-        with:
-          key: windows-x64-ccache
-          max-size: 500M
-          save-always: true
-
-      - name: Install build tools
-        run: |
-          pip install build scikit-build-core delvewheel setuptools-scm
-
-      # ── Build ──
-      # Manifest mode is OFF because the pre-install step already populated
-      # native/vcpkg_installed. CMakeLists.txt adds that path to CMAKE_PREFIX_PATH.
-      - name: Build Windows wheel
-        env:
-          MSBUILDDISABLENODEREUSE: '1'
-          CMAKE_ARGS: "-DVCPKG_MANIFEST_MODE=OFF -DVCPKG_TARGET_TRIPLET=x64-windows-release -DCMAKE_PREFIX_PATH=${{ github.workspace }}/native/vcpkg_installed/x64-windows-release"
-        run: python -m build --wheel --no-isolation --config-setting=cmake.define.VCPKG_MANIFEST_MODE=OFF
-
-      # ── Vendor runtime DLLs into the wheel ──
-      - name: Repair wheel with delvewheel
-        run: |
-          New-Item -ItemType Directory -Force -Path repaired
-          delvewheel repair dist/*.whl -w repaired/ --add-path native/vcpkg_installed/x64-windows-release/bin --analyze-existing --no-mangle-all -v
-          Remove-Item dist/*.whl
-          Move-Item repaired/*.whl dist/
-
-      - name: Verify vendored DLLs
-        run: |
-          pip install wheel-inspect
-          python -c "import zipfile, sys; whl = list(__import__('pathlib').Path('dist').glob('*.whl'))[0]; zf = zipfile.ZipFile(whl); dlls = [n for n in zf.namelist() if n.endswith('.dll')]; print(f'DLLs in wheel ({len(dlls)}):'); [print(f'  {d}') for d in sorted(dlls)]; sys.exit(0 if len(dlls) > 1 else 1)"
-
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: dist-windows
-          path: dist/*.whl
-
-  # ═══════════════════════════════════════════════════════════════════
-  #  macOS Wheel (ARM64 Apple Silicon)
-  # ═══════════════════════════════════════════════════════════════════
-  build_macos_wheel:
-    name: Build macOS Wheel (ARM64)
-    runs-on: macos-14
-
-    env:
-      CMAKE_C_COMPILER_LAUNCHER: ccache
-      CMAKE_CXX_COMPILER_LAUNCHER: ccache
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Install macOS C++ dependencies
-        run: brew install cmake cgal pcl boost tbb eigen
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.13'
-          cache: 'pip'
-
-      - name: Setup ccache
-        uses: hendrikmuhs/ccache-action@v1.2
-        with:
-          key: macos-arm64-ccache
-          max-size: 500M
-          save-always: true
-
-      - name: Install build tools
-        run: pip install build scikit-build-core delocate setuptools-scm
-
-      - name: Build macOS wheel
-        run: python -m build --wheel
-
-      # ── Vendor runtime dylibs into the wheel ──
-      - name: Repair macOS wheel with delocate
-        run: |
-          mkdir -p repaired
-          delocate-wheel -w repaired/ -v dist/*.whl
-          rm dist/*.whl
-          mv repaired/*.whl dist/
-
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: dist-macos
-          path: dist/*.whl
-
-  # ═══════════════════════════════════════════════════════════════════
-  #  Integration Tests (per-platform)
-  # ═══════════════════════════════════════════════════════════════════
-  test_wheels:
-    name: Test Wheel (${{ matrix.platform }})
-    needs: [build_linux_wheels, build_windows_wheel, build_macos_wheel]
+  test_matrix:
+    name: Test (${{ matrix.os }}, py${{ matrix.python-version }})
+    needs: [build]
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - platform: linux-x86_64
-            os: ubuntu-22.04
-            artifact: dist-linux-x86_64
-          - platform: windows
-            os: windows-2022
-            artifact: dist-windows
-          - platform: macos-arm64
-            os: macos-14
-            artifact: dist-macos
-    runs-on: ${{ matrix.os }}
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python-version: ['3.10', '3.11', '3.12', '3.13']
 
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
         with:
-          python-version: '3.13'
+          python-version: ${{ matrix.python-version }}
 
-      - name: Download wheel
+      - name: Download dist artifact
         uses: actions/download-artifact@v4
         with:
-          name: ${{ matrix.artifact }}
-          path: dist/
+          name: dist
+          path: dist
 
-      - name: Install wheel in clean venv
+      - name: Install wheel and test dependencies
         shell: bash
         run: |
-          python -m venv test-env
-          if [ "$RUNNER_OS" = "Windows" ]; then
-            source test-env/Scripts/activate
-          else
-            source test-env/bin/activate
-          fi
           pip install dist/*.whl pytest
-          pytest tests/test_config.py tests/test_io.py tests/test_native.py -v --tb=short
+
+      - name: Run test suite on installed package
+        shell: bash
+        run: |
+          pytest tests/ -v --tb=short
 
   # ═══════════════════════════════════════════════════════════════════
   #  Publish to PyPI (Trusted Publisher — OIDC, no stored tokens)
   # ═══════════════════════════════════════════════════════════════════
   publish_pypi:
     name: Publish to PyPI
-    needs: [test_wheels]
+    needs: [test_matrix]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
     environment: pypi
@@ -284,12 +90,12 @@ jobs:
       id-token: write
 
     steps:
-      - name: Download all dist artifacts
+      - name: Download dist artifacts
         uses: actions/download-artifact@v4
         with:
-          pattern: dist-*
+          name: dist
           path: dist
-          merge-multiple: true
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
+

@@ -2,6 +2,7 @@
 
 from ._display_grid import svr_map
 from ._version import version as __version__
+from .algorithm import PurePythonResult, analyze_pure_python
 from .analyze import (
     analyze_file,
     analyze_ply,
@@ -15,6 +16,7 @@ from .result import PlaneFit, RoughnessGrid, RoughnessResult, format_report
 
 __all__ = [
     "PlaneFit",
+    "PurePythonResult",
     "RoughnessConfig",
     "RoughnessGrid",
     "RoughnessResult",
@@ -22,6 +24,7 @@ __all__ = [
     "analyze_file",
     "analyze_ply",
     "analyze_points",
+    "analyze_pure_python",
     "compute_roughness",
     "compute_roughness_from_ply",
     "format_report",

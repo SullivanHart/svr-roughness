@@ -101,8 +101,11 @@ def load_delimited(path: str | Path) -> FloatArray:
     delimiter = "," if suffix == ".csv" else "\t" if suffix == ".tsv" else None
     try:
         data = np.loadtxt(path, delimiter=delimiter, comments="#", ndmin=2)
-    except ValueError as exc:
-        raise ValueError(f"Could not read XYZ coordinates from {Path(path).name}") from exc
+    except ValueError:
+        try:
+            data = np.loadtxt(path, delimiter=delimiter, comments="#", skiprows=1, ndmin=2)
+        except ValueError as exc:
+            raise ValueError(f"Could not read XYZ coordinates from {Path(path).name}") from exc
     if data.shape[1] < 3:
         raise ValueError("Delimited point files must contain at least three columns")
     return _clean_loaded_points(data[:, :3])
@@ -164,7 +167,7 @@ def load_stl_vertices(path: str | Path) -> FloatArray:
         vertices = _read_binary_stl_vertices(raw)
     else:
         vertices = _read_ascii_stl_vertices(raw.decode("utf-8", errors="ignore"))
-    return _clean_loaded_points(np.unique(np.round(vertices, decimals=9), axis=0))
+    return _clean_loaded_points(vertices)
 
 
 def _read_pcd_header(handle: BinaryIO) -> tuple[dict[str, str], int]:

@@ -9,9 +9,9 @@ import numpy as np
 import numpy.typing as npt
 
 from ._display_grid import crop_points, fit_plane_basis
+from .algorithm import analyze_pure_python
 from .config import RoughnessConfig, coerce_range
 from .io import load_ascii_ply, load_points
-from .native import analyze_native
 from .result import RoughnessGrid, RoughnessResult
 
 
@@ -21,14 +21,14 @@ def analyze_points(
     progress: Callable[[str, float], None] | None = None,
     **overrides: Any,
 ) -> RoughnessResult:
-    """Analyze an Nx3 XYZ point array using the native SurfInspect C++ core.
+    """Analyze an Nx3 XYZ point array using ASTM WK92969 Gaussian areal roughness.
 
     This is the canonical roughness path. File-specific APIs load data and
-    then delegate here to execute the native C++ numerical engine.
+    then delegate here to execute the ASTM WK92969 / ISO 16610-61 numerical engine.
 
-    All heavy computation (gridding, Gaussian filtering, variogram) is
-    performed by the C++ core. Python only handles I/O, validation, and
-    packaging the result.
+    All computation (voxel downsampling, PCA plane alignment, 2.5D grid rasterization,
+    dual-pass Gaussian filtration, and FFT autocorrelation variogram) is
+    performed using vectorized NumPy operations.
     """
 
     resolved = _resolve_config(config, overrides)
@@ -54,56 +54,53 @@ def analyze_points(
         _, crop_mask = crop_points(selection_plane.coords, resolved)
         selected = selected[crop_mask]
     if len(selected) < 20:
-        raise ValueError("SurfInspect native core requires at least 20 valid points")
+        raise ValueError("SurfInspect engine requires at least 20 valid points")
 
-    # ── Execute the native C++ core (all heavy math happens here) ──
-    native = analyze_native(selected, resolved)
+    if progress:
+        progress("Executing ASTM WK92969 analysis", 0.40)
+
+    # ── Execute the pure-Python ASTM WK92969 numerical engine ──
+    pure_res = analyze_pure_python(
+        selected,
+        voxel_size_mm=resolved.grid_mm,
+        short_cutoff_mm=resolved.short_cutoff_mm,
+        long_cutoff_mm=resolved.long_cutoff_mm,
+        variogram_points=resolved.svr_points,
+        variogram_span_mm=resolved.svr_span_mm,
+    )
 
     # ── Plane fit for metadata ──
     plane = fit_plane_basis(selected)
 
-    # ── Package the C++ grid into RoughnessGrid ──
-    if native.grid_z_mm is not None and native.grid_origin_mm is not None:
-        grid_z = native.grid_z_mm
-        valid = ~np.isnan(grid_z)
-        grid = RoughnessGrid(
-            raw=grid_z,
-            filled=grid_z,
-            filtered=grid_z,
-            valid_raw=valid,
-            valid_filled=valid,
-            origin=native.grid_origin_mm,
-            svr_map=native.grid_svr_um,
-        )
-    else:
-        # Non-standard path (gaussian_mesh=False) — no organized grid available.
-        # Create a minimal 1×1 placeholder so the result type is always valid.
-        empty = np.full((1, 1), np.nan, dtype=np.float64)
-        grid = RoughnessGrid(
-            raw=empty,
-            filled=empty,
-            filtered=empty,
-            valid_raw=np.zeros((1, 1), dtype=bool),
-            valid_filled=np.zeros((1, 1), dtype=bool),
-            origin=np.array([0.0, 0.0, resolved.grid_mm], dtype=np.float64),
-        )
+    # ── Package the raster elevation grid into RoughnessGrid ──
+    grid_z = pure_res.grid_z_mm
+    valid = ~np.isnan(grid_z)
+    grid = RoughnessGrid(
+        raw=grid_z,
+        filled=grid_z,
+        filtered=grid_z,
+        valid_raw=valid,
+        valid_filled=valid,
+        origin=pure_res.grid_origin_mm,
+        svr_map=pure_res.grid_svr_um,
+    )
 
     if progress:
         progress("Complete", 1.0)
     return RoughnessResult(
-        sa_um=native.sa_um,
-        sq_um=native.sq_um,
-        svr_um=native.svr_um,
+        sa_um=pure_res.sa_um,
+        sq_um=pure_res.sq_um,
+        svr_um=pure_res.svr_um,
         points=len(points),
-        cropped_points=native.processed_points,
+        cropped_points=pure_res.processed_points,
         plane=plane,
         raw_residual_std_mm=float(plane.coords[:, 2].std()),
         raw_residual_p05_mm=float(np.percentile(plane.coords[:: max(1, len(plane.coords) // 50000), 2], 5)),
         raw_residual_p95_mm=float(np.percentile(plane.coords[:: max(1, len(plane.coords) // 50000), 2], 95)),
         grid=grid,
-        surface_distances_mm=native.surface_distances_mm,
-        variogram_bins_um=native.variogram_bins_um,
-        variogram_counts=native.variogram_counts,
+        surface_distances_mm=pure_res.surface_distances_mm,
+        variogram_bins_um=pure_res.variogram_bins_um,
+        variogram_counts=pure_res.variogram_counts,
         config=resolved,
     )
 
