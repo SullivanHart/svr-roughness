@@ -39,6 +39,7 @@ svr-roughness = "svr_roughness.__main__:main"
 [tool.scikit-build]
 cmake.version = ">=3.20"
 cmake.source-dir = "native"
+build-dir = "native/build"
 wheel.packages = ["src/svr_roughness"]
 wheel.py-api = "py3"
 sdist.include = [
