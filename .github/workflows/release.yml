@@ -206,10 +206,18 @@ jobs:
           save-always: true
 
       - name: Install build tools
-        run: pip install build scikit-build-core
+        run: pip install build scikit-build-core delocate setuptools-scm
 
       - name: Build macOS wheel
         run: python -m build --wheel
+
+      # ── Vendor runtime dylibs into the wheel ──
+      - name: Repair macOS wheel with delocate
+        run: |
+          mkdir -p repaired
+          delocate-wheel -w repaired/ -v dist/*.whl
+          rm dist/*.whl
+          mv repaired/*.whl dist/
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
