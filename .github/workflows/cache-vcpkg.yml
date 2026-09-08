@@ -1,0 +1,37 @@
+name: Cache Windows Dependencies
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'native/vcpkg.json'
+      - '.github/workflows/cache-vcpkg.yml'
+  workflow_dispatch:
+
+jobs:
+  cache_vcpkg_windows:
+    name: Build & Cache vcpkg (Windows) on main
+    runs-on: windows-2022
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Restore vcpkg installed directory
+        id: cache-vcpkg
+        uses: actions/cache/restore@v4
+        with:
+          path: native/vcpkg_installed
+          key: windows-vcpkg-rel-v1-${{ hashFiles('native/vcpkg.json') }}
+
+      - name: Install vcpkg dependencies (release only, skip if cached)
+        if: steps.cache-vcpkg.outputs.cache-hit != 'true'
+        run: |
+          vcpkg install --triplet=x64-windows-release --x-manifest-root=native --x-install-root=native/vcpkg_installed
+
+      - name: Save vcpkg cache to main branch
+        if: steps.cache-vcpkg.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: native/vcpkg_installed
+          key: windows-vcpkg-rel-v1-${{ hashFiles('native/vcpkg.json') }}
+
