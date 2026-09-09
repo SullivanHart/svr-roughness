@@ -83,6 +83,7 @@ Thumbs.db
 # Example and test data files
 example_files/
 TestFiles/
+output/
 *.ply
 *.pcd
 *.npz
