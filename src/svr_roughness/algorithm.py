@@ -32,6 +32,8 @@ class PurePythonResult(NamedTuple):
     grid_origin_mm: np.ndarray
     grid_z_mm: np.ndarray
     grid_svr_um: np.ndarray
+    noise_floor_um: float = 0.0
+    svr_raw_um: float = 0.0
 
 
 def voxel_downsample(points_m: np.ndarray, voxel_size_m: float) -> np.ndarray:
@@ -446,6 +448,7 @@ def analyze_pure_python(
     long_cutoff_mm: float = 25.0,
     variogram_points: int = 10,
     variogram_span_mm: float = 0.5,
+    subtract_noise: bool = True,
 ) -> PurePythonResult:
     """Execute the complete SurfInspect ASTM WK92969 analysis in 100% pure Python."""
     raw_pts = np.asarray(points_xyz_mm, dtype=np.float64)
@@ -474,16 +477,31 @@ def analyze_pure_python(
     # Step 4: 2.5D Regular Elevation Grid Rasterization
     grid_z_m, valid_mask, origin_x_m, origin_y_m = rasterize_elevation_grid(rotated_m, voxel_size_m)
 
+    # Dynamic instrument noise estimation on elevation grid via 2D discrete Laplacian MAD:
+    lap = _fft_convolve2d_same(grid_z_m, np.array([[0.0, 1.0, 0.0], [1.0, -4.0, 1.0], [0.0, 1.0, 0.0]], dtype=np.float64))
+    valid_lap = valid_mask & np.isfinite(lap)
+    if np.any(valid_lap):
+        mad = float(np.median(np.abs(lap[valid_lap] - np.median(lap[valid_lap]))))
+        noise_floor_um = float((mad / 0.6745 / math.sqrt(20.0)) * 1e6)
+    else:
+        noise_floor_um = 0.0
+
     # Step 5: Dual-Pass ISO 16610-61 Gaussian Filtration
     roughness_z_m = apply_dual_pass_gaussian_filter(grid_z_m, voxel_size_m, short_cutoff_m, long_cutoff_m)
 
     # Step 6: Variogram & Svr Metrology
-    sa_um, sq_um, svr_um, var_bins_um, var_counts, grid_svr_um = compute_variogram_and_svr(
+    sa_um, sq_um, svr_raw_um, var_bins_um, var_counts, grid_svr_um = compute_variogram_and_svr(
         roughness_z_m,
         voxel_size_m,
         variogram_points,
         span_m,
     )
+
+    # Single definitive Svr measurement (with dynamic noise floor subtraction if enabled)
+    if subtract_noise and noise_floor_um > 0.0:
+        svr_um = float(math.sqrt(max(0.0, svr_raw_um**2 - noise_floor_um**2)))
+    else:
+        svr_um = svr_raw_um
 
     height, width = roughness_z_m.shape
     grid_z_mm = roughness_z_m * 1000.0
@@ -502,5 +520,7 @@ def analyze_pure_python(
         grid_origin_mm=np.array([origin_x_m * 1000.0, origin_y_m * 1000.0, voxel_size_mm], dtype=np.float64),
         grid_z_mm=grid_z_mm,
         grid_svr_um=grid_svr_um,
+        noise_floor_um=noise_floor_um,
+        svr_raw_um=svr_raw_um,
     )
 

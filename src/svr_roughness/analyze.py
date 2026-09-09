@@ -67,6 +67,7 @@ def analyze_points(
         long_cutoff_mm=resolved.long_cutoff_mm,
         variogram_points=resolved.svr_points,
         variogram_span_mm=resolved.svr_span_mm,
+        subtract_noise=resolved.subtract_noise,
     )
 
     # ── Plane fit for metadata ──
@@ -102,6 +103,8 @@ def analyze_points(
         variogram_bins_um=pure_res.variogram_bins_um,
         variogram_counts=pure_res.variogram_counts,
         config=resolved,
+        noise_floor_um=pure_res.noise_floor_um,
+        svr_raw_um=pure_res.svr_raw_um,
     )
 
 

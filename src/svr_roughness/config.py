@@ -35,6 +35,7 @@ class RoughnessConfig:
     statistical_stddev: float = 3.0
     # Select the recovered Cloud-Viewer PCA-aligned 1 mm Gaussian mesh path.
     gaussian_mesh: bool = True
+    subtract_noise: bool = True
 
     @classmethod
     def surfinspect_defaults(cls) -> RoughnessConfig:
@@ -94,6 +95,7 @@ def config_from_values(
     statistical_mean_k: int = 6,
     statistical_stddev: float = 3.0,
     gaussian_mesh: bool = True,
+    subtract_noise: bool = True,
 ) -> RoughnessConfig:
     return RoughnessConfig(
         grid_mm=grid_mm,
@@ -114,4 +116,5 @@ def config_from_values(
         statistical_mean_k=statistical_mean_k,
         statistical_stddev=statistical_stddev,
         gaussian_mesh=gaussian_mesh,
+        subtract_noise=subtract_noise,
     )

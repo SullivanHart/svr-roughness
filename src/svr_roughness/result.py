@@ -50,6 +50,8 @@ class RoughnessResult:
     variogram_bins_um: FloatArray
     variogram_counts: IntArray
     config: RoughnessConfig
+    noise_floor_um: float = 0.0
+    svr_raw_um: float = 0.0
 
     @property
     def svr_mm(self) -> float:
@@ -158,6 +160,8 @@ class RoughnessResult:
             "sa_um": self.sa_um,
             "sq_um": self.sq_um,
             "svr_um": self.svr_um,
+            "svr_raw_um": self.svr_raw_um,
+            "noise_floor_um": self.noise_floor_um,
             "points": self.points,
             "cropped_points": self.cropped_points,
             "grid_width": int(self.grid.raw.shape[1]),
@@ -233,6 +237,8 @@ def format_report(result: RoughnessResult, target_svr_mm: float | None = None) -
         f"  Sa   = {result.sa_um:.3f} µm",
         f"  Sq   = {result.sq_um:.3f} µm",
     ]
+    if result.noise_floor_um > 0:
+        lines.append(f"  (Dynamic Noise Floor: {result.noise_floor_um:.2f} µm, Raw S_VR: {result.svr_raw_um:.2f} µm)")
 
     if target_svr_mm is not None and target_svr_mm > 0:
         passed = result.svr_mm <= target_svr_mm
