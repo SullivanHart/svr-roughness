@@ -132,6 +132,8 @@ def _crop_grid_boundaries(valid_mask: np.ndarray) -> tuple[int, int, int, int]:
     y_begin, y_end = 0, dim_y
     changed = True
     while changed:
+        if x_begin >= x_end or y_begin >= y_end:
+            return 0, 0, 0, 0
         changed = False
         for x in range(x_begin, x_end):
             if missing_data[x, y_begin] == 2:
@@ -208,6 +210,8 @@ def rasterize_elevation_grid(
 
     # Shave outer missing boundaries (cropPointCloud)
     y_begin, y_end, x_begin, x_end = _crop_grid_boundaries(valid)
+    if y_begin >= y_end or x_begin >= x_end:
+        raise ValueError("Insufficient contiguous surface area to form a valid roughness grid")
     grid_z = grid_z[y_begin:y_end, x_begin:x_end]
     valid = valid[y_begin:y_end, x_begin:x_end]
     origin_x = min_x + x_begin * pitch_m
