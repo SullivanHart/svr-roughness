@@ -77,6 +77,12 @@ htmlcov/
 *.user
 *.swp
 *.swo
-*~
 .DS_Store
 Thumbs.db
+
+# Example and test data files
+example_files/
+TestFiles/
+*.ply
+*.pcd
+*.npz
