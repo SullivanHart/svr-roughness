@@ -35,7 +35,6 @@ Issues = "https://github.com/sullivanhart/svr-roughness/issues"
 
 [project.scripts]
 svr-roughness = "svr_roughness.__main__:main"
-svr-verify = "svr_roughness.verify:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
