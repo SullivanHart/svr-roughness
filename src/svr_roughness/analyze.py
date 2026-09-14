@@ -12,7 +12,7 @@ from ._display_grid import crop_points, fit_plane_basis
 from .algorithm import analyze_pure_python
 from .config import RoughnessConfig, coerce_range
 from .io import load_ascii_ply, load_points
-from .result import RoughnessGrid, RoughnessResult
+from .result import RoughnessResult
 
 
 def analyze_points(
@@ -73,38 +73,24 @@ def analyze_points(
     # ── Plane fit for metadata ──
     plane = fit_plane_basis(selected)
 
-    # ── Package the raster elevation grid into RoughnessGrid ──
-    grid_z = pure_res.grid_z_mm
-    valid = ~np.isnan(grid_z)
-    grid = RoughnessGrid(
-        raw=grid_z,
-        filled=grid_z,
-        filtered=grid_z,
-        valid_raw=valid,
-        valid_filled=valid,
-        origin=pure_res.grid_origin_mm,
-        svr_map=pure_res.grid_svr_um,
-    )
-
     if progress:
         progress("Complete", 1.0)
+
     return RoughnessResult(
+        svr_um=pure_res.svr_um,
         sa_um=pure_res.sa_um,
         sq_um=pure_res.sq_um,
-        svr_um=pure_res.svr_um,
+        noise_floor_um=pure_res.noise_floor_um,
+        svr_raw_um=pure_res.svr_raw_um,
         points=len(points),
-        cropped_points=pure_res.processed_points,
+        processed_points=pure_res.processed_points,
         plane=plane,
-        raw_residual_std_mm=float(plane.coords[:, 2].std()),
-        raw_residual_p05_mm=float(np.percentile(plane.coords[:: max(1, len(plane.coords) // 50000), 2], 5)),
-        raw_residual_p95_mm=float(np.percentile(plane.coords[:: max(1, len(plane.coords) // 50000), 2], 95)),
-        grid=grid,
-        surface_distances_mm=pure_res.surface_distances_mm,
+        grid=pure_res.grid_z_mm,
+        grid_pitch_mm=float(resolved.grid_mm),
+        grid_origin_mm=pure_res.grid_origin_mm,
         variogram_bins_um=pure_res.variogram_bins_um,
         variogram_counts=pure_res.variogram_counts,
         config=resolved,
-        noise_floor_um=pure_res.noise_floor_um,
-        svr_raw_um=pure_res.svr_raw_um,
     )
 
 

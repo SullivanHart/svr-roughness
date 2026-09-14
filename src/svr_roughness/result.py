@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import numpy.typing as npt
@@ -24,34 +25,30 @@ class PlaneFit:
 
 
 @dataclass(frozen=True)
-class RoughnessGrid:
-    raw: FloatArray
-    filled: FloatArray
-    filtered: FloatArray
-    valid_raw: BoolArray
-    valid_filled: BoolArray
-    origin: FloatArray
-    svr_map: FloatArray | None = None
-
-
-@dataclass(frozen=True)
 class RoughnessResult:
+    """Standardized ASTM WK92969 areal surface roughness result."""
+
+    # ── Primary Metrology Metrics ──
+    svr_um: float
     sa_um: float
     sq_um: float
-    svr_um: float
-    points: int
-    cropped_points: int
-    plane: PlaneFit
-    raw_residual_std_mm: float
-    raw_residual_p05_mm: float
-    raw_residual_p95_mm: float
-    grid: RoughnessGrid
-    surface_distances_mm: FloatArray
-    variogram_bins_um: FloatArray
-    variogram_counts: IntArray
-    config: RoughnessConfig
     noise_floor_um: float = 0.0
     svr_raw_um: float = 0.0
+
+    # ── Point Cloud Geometry & Counts ──
+    points: int = 0
+    processed_points: int = 0
+    plane: PlaneFit = None
+
+    # ── 2D Filtered Roughness Grid ──
+    grid: FloatArray = None
+    grid_pitch_mm: float = 0.20
+    grid_origin_mm: FloatArray = None
+
+    # ── Variogram Curve ──
+    variogram_bins_um: FloatArray = None
+    variogram_counts: IntArray = None
+    config: RoughnessConfig = None
 
     @property
     def svr_mm(self) -> float:
@@ -66,11 +63,15 @@ class RoughnessResult:
     @property
     def patch_width_mm(self) -> float:
         """Width of the surface patch along the fitted plane X-axis in mm."""
+        if self.plane is None or len(self.plane.coords) == 0:
+            return float(self.grid.shape[1] * self.grid_pitch_mm) if self.grid is not None else 0.0
         return float(self.plane.coords[:, 0].max() - self.plane.coords[:, 0].min())
 
     @property
     def patch_height_mm(self) -> float:
         """Height of the surface patch along the fitted plane Y-axis in mm."""
+        if self.plane is None or len(self.plane.coords) == 0:
+            return float(self.grid.shape[0] * self.grid_pitch_mm) if self.grid is not None else 0.0
         return float(self.plane.coords[:, 1].max() - self.plane.coords[:, 1].min())
 
     @property
@@ -90,18 +91,19 @@ class RoughnessResult:
         density = self.point_density_pts_mm2
         return float(1.0 / np.sqrt(density)) if density > 0 else 0.0
 
-    def comparator_equivalents(self) -> dict[str, str]:
-        """Convert S_VR to approximate equivalent comparator visual grades per Appendices X1-X3.
+    def heatmap(self, radius_mm: float = 5.0) -> FloatArray:
+        """Compute the 2D local Svr spatial roughness heatmap (in µm) on demand."""
+        from .algorithm import compute_heatmap_grid
 
-        ASTM WK92969 references:
-          - Appendix X1: GAR C-9 Cast Microfinish Comparator
-          - Appendix X2: SCRATA Standard (ASTM A802)
-          - Appendix X3: ACI Surface Indicator Scale
-        """
+        if self.grid is None:
+            raise ValueError("No grid available to compute heatmap")
+        return compute_heatmap_grid(self.grid, self.grid_pitch_mm, radius_mm)
+
+    def comparator_equivalents(self) -> dict[str, str]:
+        """Convert S_VR to approximate equivalent comparator visual grades per Appendices X1-X3."""
         svr = self.svr_mm
 
         # SCRATA Comparator (A802) - Appendix X2
-        # A1: 0.0264 mm, A2: 0.0448 mm, A3: 0.0630 mm, A4: 0.1315 mm
         if svr < 0.0214:
             scrata = "< A1 (Finer than 0.026 mm)"
         elif svr <= 0.0356:
@@ -116,7 +118,6 @@ class RoughnessResult:
             scrata = "> A4 (Rougher than 0.132 mm)"
 
         # GAR C-9 Comparator - Appendix X1
-        # 200: 0.0092, 300: 0.0163, 420: 0.0187, 560: 0.0274, 720: 0.0585, 900: 0.0711 mm
         if svr < 0.0089:
             gar = "< C-9 200"
         elif svr <= 0.0128:
@@ -135,7 +136,6 @@ class RoughnessResult:
             gar = "> C-9 900"
 
         # ACI Surface Indicator Scale (SIS) - Appendix X3
-        # SIS-1: 0.0094, SIS-2: 0.0199, SIS-3: 0.0245, SIS-4: 0.0801 mm
         if svr < 0.0088:
             aci = "< SIS-1"
         elif svr <= 0.0147:
@@ -155,26 +155,27 @@ class RoughnessResult:
             "ACI SIS": aci,
         }
 
-    def metrics_dict(self) -> dict[str, float | int]:
+    def to_dict(self) -> dict[str, Any]:
+        """Return a clean JSON-serializable dictionary of metrics and metadata."""
+        grid_shape = [int(self.grid.shape[0]), int(self.grid.shape[1])] if self.grid is not None else [0, 0]
         return {
-            "sa_um": self.sa_um,
-            "sq_um": self.sq_um,
-            "svr_um": self.svr_um,
-            "svr_raw_um": self.svr_raw_um,
-            "noise_floor_um": self.noise_floor_um,
-            "points": self.points,
-            "cropped_points": self.cropped_points,
-            "grid_width": int(self.grid.raw.shape[1]),
-            "grid_height": int(self.grid.raw.shape[0]),
-            "grid_pitch_mm": float(self.config.grid_mm),
-            "grid_coverage_raw_percent": float(self.grid.valid_raw.mean() * 100.0),
-            "grid_coverage_filled_percent": float(self.grid.valid_filled.mean() * 100.0),
-            "short_cutoff_mm": float(self.config.short_cutoff_mm),
-            "long_cutoff_mm": float(self.config.long_cutoff_mm),
-            "mesh_resolution_mm": float(self.config.mesh_resolution_mm),
-            "mesh_smoothing_mm": float(self.config.mesh_smoothing_mm),
-            "max_svr_points": int(self.config.max_svr_points),
+            "svr_um": round(self.svr_um, 3),
+            "sa_um": round(self.sa_um, 3),
+            "sq_um": round(self.sq_um, 3),
+            "svr_raw_um": round(self.svr_raw_um, 3),
+            "noise_floor_um": round(self.noise_floor_um, 3),
+            "points": int(self.points),
+            "processed_points": int(self.processed_points),
+            "grid_shape": grid_shape,
+            "grid_pitch_mm": float(self.grid_pitch_mm),
+            "variogram_bins_um": [round(float(v), 4) for v in self.variogram_bins_um] if self.variogram_bins_um is not None else [],
+            "variogram_counts": [int(c) for c in self.variogram_counts] if self.variogram_counts is not None else [],
+            "comparators": self.comparator_equivalents(),
         }
+
+    def metrics_dict(self) -> dict[str, Any]:
+        """Backward-compatible alias for to_dict()."""
+        return self.to_dict()
 
     def save_metrics_json(self, path: str | Path) -> None:
         save_metrics_json(self, path)
@@ -182,49 +183,49 @@ class RoughnessResult:
     def save_grid_npz(self, path: str | Path) -> None:
         save_grid_npz(self, path)
 
+    def __repr__(self) -> str:
+        nf_str = f", noise floor: {self.noise_floor_um:.2f} µm" if self.noise_floor_um > 0 else ""
+        grid_info = f"{self.grid.shape[1]} × {self.grid.shape[0]} cells (pitch: {self.grid_pitch_mm:.3f} mm)" if self.grid is not None else "None"
+        return (
+            f"RoughnessResult(\n"
+            f"  Svr = {self.svr_um:.2f} µm (raw: {self.svr_raw_um:.2f} µm{nf_str})\n"
+            f"  Sa  = {self.sa_um:.2f} µm\n"
+            f"  Sq  = {self.sq_um:.2f} µm\n"
+            f"  Points: {self.points:,} (processed: {self.processed_points:,})\n"
+            f"  Grid:   {grid_info}\n"
+            f")"
+        )
+
 
 def save_grid_npz(result: RoughnessResult, path: str | Path) -> None:
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     np.savez(
         Path(path),
-        grid_raw=result.grid.raw,
-        grid_filled=result.grid.filled,
-        grid_filtered=result.grid.filtered,
-        valid_raw=result.grid.valid_raw,
-        valid_filled=result.grid.valid_filled,
-        grid_origin=result.grid.origin,
-        plane_centroid=result.plane.centroid,
-        plane_normal=result.plane.normal,
-        plane_x_axis=result.plane.x_axis,
-        plane_y_axis=result.plane.y_axis,
+        grid=result.grid,
+        grid_pitch_mm=result.grid_pitch_mm,
+        grid_origin=result.grid_origin_mm,
+        plane_centroid=result.plane.centroid if result.plane else np.zeros(3),
+        plane_normal=result.plane.normal if result.plane else np.zeros(3),
+        plane_x_axis=result.plane.x_axis if result.plane else np.zeros(3),
+        plane_y_axis=result.plane.y_axis if result.plane else np.zeros(3),
     )
 
 
 def save_metrics_json(result: RoughnessResult, path: str | Path) -> None:
     metrics_path = Path(path)
     metrics_path.parent.mkdir(parents=True, exist_ok=True)
-    metrics_path.write_text(json.dumps(result.metrics_dict(), indent=2) + "\n")
+    metrics_path.write_text(json.dumps(result.to_dict(), indent=2) + "\n")
 
 
 def format_report(result: RoughnessResult, target_svr_mm: float | None = None) -> str:
-    """Format a human-readable report per ASTM WK92969 §10.
-
-    §10.1 required fields:
-      - 10.1.1  Test result (S_VR)
-      - 10.1.2  Evaluation length
-      - 10.1.3  Distance bucket size
-      - 10.1.4  Cutoff wavelengths
-      - 10.1.5  Pre-processing parameters
-    """
-    eval_length_mm = result.config.svr_points * result.config.svr_span_mm
+    """Format a human-readable report per ASTM WK92969 §10."""
+    eval_length_mm = result.config.svr_points * result.config.svr_span_mm if result.config else 5.0
     patch_w = result.patch_width_mm
     patch_h = result.patch_height_mm
     density = result.point_density_pts_mm2
     spacing = result.average_point_spacing_mm
 
-    # ASTM WK92969 §3.1.5 recommendation: 50x50 mm or larger
     patch_valid = patch_w >= 50.0 and patch_h >= 50.0
-    # ASTM WK92969 §8.2 requirement: Point density of 0.2 mm or better required
     density_valid = spacing <= 0.20
 
     lines = [
@@ -254,19 +255,14 @@ def format_report(result: RoughnessResult, target_svr_mm: float | None = None) -
         [
             "",
             "§10.1.2  Evaluation Length",
-            f"  {eval_length_mm:.1f} mm  ({result.config.svr_points} bins × {result.config.svr_span_mm} mm)",
+            f"  {eval_length_mm:.1f} mm",
             "",
             "§10.1.3  Distance Bucket Size",
-            f"  {result.config.svr_span_mm} mm",
+            f"  {result.config.svr_span_mm if result.config else 0.5} mm",
             "",
             "§10.1.4  Cutoff Wavelengths",
-            f"  Short (λs): {result.config.short_cutoff_mm:g} mm",
-            f"  Long  (λc): {result.config.long_cutoff_mm:g} mm",
-            "",
-            "§10.1.5  Pre-processing Parameters",
-            f"  Downsampling:   {result.config.grid_mm} mm",
-            f"  Outlier filter: {f'ON (k={result.config.statistical_mean_k}, σ={result.config.statistical_stddev})' if result.config.statistical_filter else 'OFF'}",
-            f"  Gaussian mesh:  {'ON (ISO 16610-61)' if result.config.gaussian_mesh else 'OFF'}",
+            f"  Short (λs): {result.config.short_cutoff_mm:g} mm" if result.config else "  Short: N/A",
+            f"  Long  (λc): {result.config.long_cutoff_mm:g} mm" if result.config else "  Long: N/A",
             "",
             "───────────────────────────────────────────────────────",
             "  Surface Patch & Sensor Validation",
@@ -274,12 +270,10 @@ def format_report(result: RoughnessResult, target_svr_mm: float | None = None) -
             f"  Patch Dimensions (§3.1.5): {patch_w:.1f} × {patch_h:.1f} mm (Area: {result.patch_area_mm2:.0f} mm²)",
             f"  Patch Size Status:         {'VALID (>= 50x50 mm)' if patch_valid else 'WARNING (< 50x50 mm recommended)'}",
             f"  Raw Points:                {result.points:,}",
-            f"  Processed Points:          {result.cropped_points:,}",
+            f"  Processed Points:          {result.processed_points:,}",
             f"  Avg Point Spacing (§8.2):  {spacing:.3f} mm (~{density:.1f} pts/mm²)",
             f"  Point Density Status:      {'VALID (<= 0.20 mm spacing)' if density_valid else 'WARNING (> 0.20 mm required)'}",
-            "  Scanner Accuracy (§7.1):   Recommended < 0.076 mm (0.0030 in)",
-            f"  Grid:                      {result.grid.raw.shape[1]} × {result.grid.raw.shape[0]} cells, pitch={result.config.grid_mm:.4f} mm",
-            f"  Grid Coverage:             {result.grid.valid_filled.mean() * 100:.1f}%",
+            f"  Grid:                      {result.grid.shape[1]} × {result.grid.shape[0]} cells, pitch={result.grid_pitch_mm:.4f} mm" if result.grid is not None else "  Grid: None",
             "",
             "───────────────────────────────────────────────────────",
             "  Visual Comparator Equivalents (Appendices X1-X3)",
@@ -290,33 +284,35 @@ def format_report(result: RoughnessResult, target_svr_mm: float | None = None) -
     for std_name, grade in result.comparator_equivalents().items():
         lines.append(f"  {std_name:<24}: {grade}")
 
-    lines.extend(
-        [
-            "",
-            "───────────────────────────────────────────────────────",
-            "  Plane & Geometry Alignment",
-            "───────────────────────────────────────────────────────",
-            f"  Plane centroid: {result.plane.centroid}",
-            f"  Plane normal:   {result.plane.normal}",
-            (
-                f"  Raw residual mm: "
-                f"std={result.raw_residual_std_mm:.6f} "
-                f"p05={result.raw_residual_p05_mm:.6f} "
-                f"p95={result.raw_residual_p95_mm:.6f}"
-            ),
-            "",
-            "───────────────────────────────────────────────────────",
-            "  Variogram Bins (Evaluation Length 0 to 5.0 mm)",
-            "───────────────────────────────────────────────────────",
-        ]
-    )
-    for idx, value in enumerate(result.variogram_bins_um):
-        lo = idx * result.config.svr_span_mm
-        hi = (idx + 1) * result.config.svr_span_mm
-        if np.isfinite(value):
-            lines.append(
-                f"  {lo:.3f}–{hi:.3f} mm: {value:.3f} µm ({value / 1000.0:.4f} mm)  pairs={result.variogram_counts[idx]}"
-            )
-        else:
-            lines.append(f"  {lo:.3f}–{hi:.3f} mm: no pairs")
+    if result.plane is not None:
+        lines.extend(
+            [
+                "",
+                "───────────────────────────────────────────────────────",
+                "  Plane & Geometry Alignment",
+                "───────────────────────────────────────────────────────",
+                f"  Plane centroid: {result.plane.centroid}",
+                f"  Plane normal:   {result.plane.normal}",
+            ]
+        )
+
+    if result.variogram_bins_um is not None:
+        lines.extend(
+            [
+                "",
+                "───────────────────────────────────────────────────────",
+                "  Variogram Bins",
+                "───────────────────────────────────────────────────────",
+            ]
+        )
+        span = result.config.svr_span_mm if result.config else 0.5
+        for idx, value in enumerate(result.variogram_bins_um):
+            lo = idx * span
+            hi = (idx + 1) * span
+            if np.isfinite(value):
+                pairs_str = f"  pairs={result.variogram_counts[idx]}" if result.variogram_counts is not None and idx < len(result.variogram_counts) else ""
+                lines.append(f"  {lo:.3f}–{hi:.3f} mm: {value:.3f} µm ({value / 1000.0:.4f} mm){pairs_str}")
+            else:
+                lines.append(f"  {lo:.3f}–{hi:.3f} mm: no pairs")
+
     return "\n".join(lines)

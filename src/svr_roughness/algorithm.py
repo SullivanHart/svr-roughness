@@ -26,12 +26,10 @@ class PurePythonResult(NamedTuple):
     processed_points: int
     variogram_bins_um: np.ndarray
     variogram_counts: np.ndarray
-    surface_distances_mm: np.ndarray
     grid_width: int
     grid_height: int
     grid_origin_mm: np.ndarray
     grid_z_mm: np.ndarray
-    grid_svr_um: np.ndarray
     noise_floor_um: float = 0.0
     svr_raw_um: float = 0.0
 
@@ -352,11 +350,10 @@ def compute_variogram_and_svr(
     pitch_m: float,
     points_on_var: int = 10,
     span_m: float = 0.0005,
-) -> tuple[float, float, float, np.ndarray, np.ndarray, np.ndarray]:
-    """Compute ASTM WK92969 Sa, Sq, Svr, variogram buckets, and local Svr grid.
+) -> tuple[float, float, float, np.ndarray, np.ndarray]:
+    """Compute ASTM WK92969 Sa, Sq, Svr, and variogram buckets.
 
-    Uses 2D FFT autocorrelation for O(1) pairwise displacement accumulation (~38 ms)
-    and 2D FFT convolution for the spatial Svr heatmap grid (~50 ms).
+    Uses 2D FFT autocorrelation for O(1) pairwise displacement accumulation (~38 ms).
     """
     height, width = roughness_z_m.shape
 
@@ -428,21 +425,52 @@ def compute_variogram_and_svr(
     # Svr is mean of variogram bins (ASTM WK92969 & SurfInspect)
     svr_um = float(np.mean(var_bins_um[valid_bins])) if np.any(valid_bins) else 0.0
 
-    # Local Svr Spatial Heatmap via 2D FFT Convolution
+    return sa_um, sq_um, svr_um, var_bins_um, var_counts
+
+
+def compute_heatmap_grid(
+    roughness_grid_mm: np.ndarray,
+    pitch_mm: float,
+    radius_mm: float = 5.0,
+) -> np.ndarray:
+    """Compute local Svr spatial roughness heatmap (in µm) via 2D FFT convolution.
+
+    Args:
+        roughness_grid_mm: 2D array of Gaussian-filtered roughness elevation in mm.
+        pitch_mm: Grid cell spacing in mm.
+        radius_mm: Local circular evaluation radius in mm (default: 5.0 mm).
+
+    Returns:
+        2D float64 array of local Svr values in micrometers (µm).
+    """
+    if roughness_grid_mm.ndim != 2:
+        raise ValueError("Expected a 2D roughness elevation grid")
+    if pitch_mm <= 0 or radius_mm <= 0:
+        raise ValueError("pitch_mm and radius_mm must be positive")
+
+    max_cells = int(math.ceil(radius_mm / pitch_mm))
+    z_um = roughness_grid_mm * 1000.0
+
     y_k, x_k = np.ogrid[-max_cells : max_cells + 1, -max_cells : max_cells + 1]
-    dist_k = np.sqrt((x_k * pitch_m) ** 2 + (y_k * pitch_m) ** 2)
-    kernel = ((dist_k <= max_ev_m) & (dist_k > 0)).astype(np.float64)
+    dist_k = np.sqrt((x_k * pitch_mm) ** 2 + (y_k * pitch_mm) ** 2)
+    kernel = ((dist_k <= radius_mm) & (dist_k > 0)).astype(np.float64)
 
-    ones = np.ones_like(z_um)
-    w_local = _fft_convolve2d_same(ones, kernel)
-    conv_z = _fft_convolve2d_same(z_um, kernel)
-    conv_z2 = _fft_convolve2d_same(z_um**2, kernel)
+    finite_mask = np.isfinite(z_um)
+    z_clean = np.where(finite_mask, z_um, 0.0)
+    w_valid = finite_mask.astype(np.float64)
 
-    pixel_sum_sq = w_local * (z_um**2) + conv_z2 - 2.0 * z_um * conv_z
+    w_local = _fft_convolve2d_same(w_valid, kernel)
+    conv_z = _fft_convolve2d_same(z_clean, kernel)
+    conv_z2 = _fft_convolve2d_same(z_clean**2, kernel)
+
+    pixel_sum_sq = w_local * (z_clean**2) + conv_z2 - 2.0 * z_clean * conv_z
     pixel_sum_sq = np.maximum(pixel_sum_sq, 0.0)
-    grid_svr_um = np.sqrt(pixel_sum_sq / np.maximum(w_local, 1.0))
 
-    return sa_um, sq_um, svr_um, var_bins_um, var_counts, grid_svr_um
+    valid_cells = (w_local >= 3.0) & finite_mask
+    heatmap_um = np.full_like(z_um, np.nan)
+    heatmap_um[valid_cells] = np.sqrt(pixel_sum_sq[valid_cells] / w_local[valid_cells])
+
+    return heatmap_um
 
 
 def analyze_pure_python(
@@ -494,7 +522,7 @@ def analyze_pure_python(
     roughness_z_m = apply_dual_pass_gaussian_filter(grid_z_m, voxel_size_m, short_cutoff_m, long_cutoff_m)
 
     # Step 6: Variogram & Svr Metrology
-    sa_um, sq_um, svr_raw_um, var_bins_um, var_counts, grid_svr_um = compute_variogram_and_svr(
+    sa_um, sq_um, svr_raw_um, var_bins_um, var_counts = compute_variogram_and_svr(
         roughness_z_m,
         voxel_size_m,
         variogram_points,
@@ -509,7 +537,6 @@ def analyze_pure_python(
 
     height, width = roughness_z_m.shape
     grid_z_mm = roughness_z_m * 1000.0
-    surface_distances_mm = grid_z_mm.ravel()
 
     return PurePythonResult(
         sa_um=sa_um,
@@ -518,12 +545,10 @@ def analyze_pure_python(
         processed_points=len(downsampled_m),
         variogram_bins_um=var_bins_um,
         variogram_counts=var_counts,
-        surface_distances_mm=surface_distances_mm,
         grid_width=width,
         grid_height=height,
         grid_origin_mm=np.array([origin_x_m * 1000.0, origin_y_m * 1000.0, voxel_size_mm], dtype=np.float64),
         grid_z_mm=grid_z_mm,
-        grid_svr_um=grid_svr_um,
         noise_floor_um=noise_floor_um,
         svr_raw_um=svr_raw_um,
     )

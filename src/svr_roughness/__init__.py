@@ -1,8 +1,7 @@
 """Surface roughness analysis for scanner point clouds."""
 
-from ._display_grid import svr_map
 from ._version import version as __version__
-from .algorithm import PurePythonResult, analyze_pure_python
+from .algorithm import PurePythonResult, analyze_pure_python, compute_heatmap_grid
 from .analyze import (
     analyze_file,
     analyze_ply,
@@ -12,19 +11,19 @@ from .analyze import (
 )
 from .config import RoughnessConfig
 from .io import load_ascii_ply, load_delimited, load_obj, load_pcd, load_ply, load_points, load_stl_vertices
-from .result import PlaneFit, RoughnessGrid, RoughnessResult, format_report
+from .result import PlaneFit, RoughnessResult, format_report, save_grid_npz, save_metrics_json
 
 __all__ = [
     "PlaneFit",
     "PurePythonResult",
     "RoughnessConfig",
-    "RoughnessGrid",
     "RoughnessResult",
     "__version__",
     "analyze_file",
     "analyze_ply",
     "analyze_points",
     "analyze_pure_python",
+    "compute_heatmap_grid",
     "compute_roughness",
     "compute_roughness_from_ply",
     "format_report",
@@ -35,5 +34,6 @@ __all__ = [
     "load_ply",
     "load_points",
     "load_stl_vertices",
-    "svr_map",
+    "save_grid_npz",
+    "save_metrics_json",
 ]

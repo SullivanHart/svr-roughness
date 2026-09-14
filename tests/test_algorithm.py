@@ -6,6 +6,7 @@ import numpy as np
 from svr_roughness.algorithm import (
     analyze_pure_python,
     apply_dual_pass_gaussian_filter,
+    compute_heatmap_grid,
     compute_variogram_and_svr,
     iso_gaussian_filter_1d_kernel,
     pca_align_plane,
@@ -79,7 +80,7 @@ class TestAlgorithm(unittest.TestCase):
     def test_variogram_monotonicity_on_roughness(self):
         rng = np.random.default_rng(123)
         grid_z = rng.normal(0, 0.00005, (100, 100))
-        sa, sq, svr, var_bins, var_counts, grid_svr = compute_variogram_and_svr(
+        sa, sq, svr, var_bins, var_counts = compute_variogram_and_svr(
             grid_z, pitch_m=0.0002, points_on_var=10, span_m=0.0005
         )
         self.assertGreater(sa, 0.0)
@@ -89,7 +90,10 @@ class TestAlgorithm(unittest.TestCase):
         self.assertGreaterEqual(sq, sa)
         self.assertEqual(len(var_bins), 10)
         self.assertTrue(np.all(var_counts > 0))
+
+        grid_svr = compute_heatmap_grid(grid_z * 1000.0, pitch_mm=0.2, radius_mm=2.0)
         self.assertEqual(grid_svr.shape, (100, 100))
+        self.assertTrue(np.any(np.isfinite(grid_svr)))
 
     def test_analyze_pure_python_synthetic(self):
         # 1000 points with Gaussian noise

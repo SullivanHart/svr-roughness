@@ -5,7 +5,7 @@ from pathlib import Path
 
 import numpy as np
 
-from svr_roughness import RoughnessConfig, analyze_file, analyze_points, format_report
+from svr_roughness import RoughnessConfig, analyze_file, analyze_points, compute_heatmap_grid, format_report
 
 
 class TestRoughnessAnalysis(unittest.TestCase):
@@ -16,7 +16,7 @@ class TestRoughnessAnalysis(unittest.TestCase):
         z = 0.05 * x - 0.02 * y + rng.normal(0, 0.02, 1000)
         points = np.column_stack([x, y, z])
 
-        config = RoughnessConfig(gaussian_mesh=True, grid_mm=0.5)
+        config = RoughnessConfig(grid_mm=0.5)
         result = analyze_points(points, config=config)
 
         self.assertGreater(result.points, 0)
@@ -24,6 +24,16 @@ class TestRoughnessAnalysis(unittest.TestCase):
         self.assertGreater(result.sq_um, 0.0)
         self.assertGreater(result.svr_um, 0.0)
         self.assertIsNotNone(result.grid)
+        self.assertEqual(result.grid.ndim, 2)
+
+        # Test on-demand heatmap computation
+        hmap = result.heatmap(radius_mm=2.5)
+        self.assertEqual(hmap.shape, result.grid.shape)
+
+        # Test clean string representation
+        repr_str = repr(result)
+        self.assertIn("Svr =", repr_str)
+        self.assertIn("Sa  =", repr_str)
 
         # Test report formatting
         report = format_report(result)
@@ -54,7 +64,7 @@ class TestRoughnessAnalysis(unittest.TestCase):
 
         result = analyze_file(sample_pcd)
         self.assertEqual(result.points, 1000255)
-        self.assertGreater(result.cropped_points, 100000)
+        self.assertGreater(result.processed_points, 100000)
         self.assertTrue(25.0 < result.sa_um < 45.0)
         self.assertTrue(35.0 < result.sq_um < 55.0)
         self.assertTrue(20.0 < result.svr_um < 35.0)

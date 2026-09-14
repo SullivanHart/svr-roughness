@@ -24,8 +24,9 @@ def main() -> None:
     parser.add_argument(
         "--gaussian-mesh", action="store_true", default=True, help="Enforce ISO 16610-61 Gaussian filtration"
     )
-    parser.add_argument("--metrics-out", type=Path)
-    parser.add_argument("--grid-out", type=Path)
+    parser.add_argument("--metrics-out", type=Path, help="Path to save metrics as JSON")
+    parser.add_argument("--grid-out", type=Path, help="Path to save 2D roughness grid as NPZ")
+    parser.add_argument("--heatmap-out", type=Path, help="Path to save 2D Svr heatmap as NPY or NPZ")
     args = parser.parse_args()
 
     result = analyze_file(
@@ -42,6 +43,14 @@ def main() -> None:
         result.save_metrics_json(args.metrics_out)
     if args.grid_out:
         result.save_grid_npz(args.grid_out)
+    if args.heatmap_out:
+        hmap = result.heatmap()
+        if args.heatmap_out.suffix == ".npz":
+            import numpy as np
+            np.savez(args.heatmap_out, heatmap=hmap, pitch_mm=result.grid_pitch_mm, origin=result.grid_origin_mm)
+        else:
+            import numpy as np
+            np.save(args.heatmap_out, hmap)
 
 
 if __name__ == "__main__":
