@@ -40,8 +40,9 @@ class RoughnessResult:
     processed_points: int = 0
     plane: PlaneFit = None
 
-    # ── 2D Filtered Roughness Grid ──
+    # ── 2D Filtered Roughness Grid & Physical Elevation Grid ──
     grid: FloatArray = None
+    elevation_grid: FloatArray = None
     grid_pitch_mm: float = 0.20
     grid_origin_mm: FloatArray = None
 
@@ -105,33 +106,33 @@ class RoughnessResult:
 
         # SCRATA Comparator (A802) - Appendix X2
         if svr < 0.0214:
-            scrata = "< A1 (Finer than 0.026 mm)"
+            scrata = "< A1"
         elif svr <= 0.0356:
-            scrata = "A1 (Nominal ~0.026 mm)"
+            scrata = "A1"
         elif svr <= 0.0539:
-            scrata = "A2 (Nominal ~0.045 mm)"
+            scrata = "A2"
         elif svr <= 0.0973:
-            scrata = "A3 (Nominal ~0.063 mm)"
+            scrata = "A3"
         elif svr <= 0.1500:
-            scrata = "A4 (Nominal ~0.132 mm)"
+            scrata = "A4"
         else:
-            scrata = "> A4 (Rougher than 0.132 mm)"
+            scrata = "> A4"
 
         # GAR C-9 Comparator - Appendix X1
         if svr < 0.0089:
             gar = "< C-9 200"
         elif svr <= 0.0128:
-            gar = "C-9 200 (Nominal ~0.009 mm)"
+            gar = "C-9 200"
         elif svr <= 0.0175:
-            gar = "C-9 300 (Nominal ~0.016 mm)"
+            gar = "C-9 300"
         elif svr <= 0.0231:
-            gar = "C-9 420 (Nominal ~0.019 mm)"
+            gar = "C-9 420"
         elif svr <= 0.0430:
-            gar = "C-9 560 (Nominal ~0.027 mm)"
+            gar = "C-9 560"
         elif svr <= 0.0648:
-            gar = "C-9 720 (Nominal ~0.059 mm)"
+            gar = "C-9 720"
         elif svr <= 0.0850:
-            gar = "C-9 900 (Nominal ~0.071 mm)"
+            gar = "C-9 900"
         else:
             gar = "> C-9 900"
 
@@ -139,18 +140,18 @@ class RoughnessResult:
         if svr < 0.0088:
             aci = "< SIS-1"
         elif svr <= 0.0147:
-            aci = "SIS-1 (Nominal ~0.009 mm)"
+            aci = "SIS-1"
         elif svr <= 0.0222:
-            aci = "SIS-2 (Nominal ~0.020 mm)"
+            aci = "SIS-2"
         elif svr <= 0.0523:
-            aci = "SIS-3 (Nominal ~0.025 mm)"
+            aci = "SIS-3"
         elif svr <= 0.1000:
-            aci = "SIS-4 (Nominal ~0.080 mm)"
+            aci = "SIS-4"
         else:
             aci = "> SIS-4"
 
         return {
-            "SCRATA (ASTM A802)": scrata,
+            "SCRATA (A802)": scrata,
             "GAR C-9": gar,
             "ACI SIS": aci,
         }
@@ -230,10 +231,10 @@ def format_report(result: RoughnessResult, target_svr_mm: float | None = None) -
 
     lines = [
         "═══════════════════════════════════════════════════════",
-        "  ASTM WK92969 Surface Variogram Roughness (S_VR) Report",
+        "  Surface Variogram Roughness (S_VR) Report",
         "═══════════════════════════════════════════════════════",
         "",
-        "§10.1.1  Test Result",
+        "Test Result",
         f"  S_VR = {result.svr_mm:.4f} mm  ({result.svr_um:.3f} µm / {result.svr_in:.5f} in)",
         f"  Sa   = {result.sa_um:.3f} µm",
         f"  Sq   = {result.sq_um:.3f} µm",
@@ -247,36 +248,36 @@ def format_report(result: RoughnessResult, target_svr_mm: float | None = None) -
         lines.extend(
             [
                 f"  Purchaser Spec Target: <= {target_svr_mm:.4f} mm",
-                f"  Status (§5.3):        {status_str}",
+                f"  Status:               {status_str}",
             ]
         )
 
     lines.extend(
         [
             "",
-            "§10.1.2  Evaluation Length",
+            "Evaluation Length",
             f"  {eval_length_mm:.1f} mm",
             "",
-            "§10.1.3  Distance Bucket Size",
+            "Distance Bucket Size",
             f"  {result.config.svr_span_mm if result.config else 0.5} mm",
             "",
-            "§10.1.4  Cutoff Wavelengths",
+            "Cutoff Wavelengths",
             f"  Short (λs): {result.config.short_cutoff_mm:g} mm" if result.config else "  Short: N/A",
             f"  Long  (λc): {result.config.long_cutoff_mm:g} mm" if result.config else "  Long: N/A",
             "",
             "───────────────────────────────────────────────────────",
             "  Surface Patch & Sensor Validation",
             "───────────────────────────────────────────────────────",
-            f"  Patch Dimensions (§3.1.5): {patch_w:.1f} × {patch_h:.1f} mm (Area: {result.patch_area_mm2:.0f} mm²)",
+            f"  Patch Dimensions:          {patch_w:.1f} × {patch_h:.1f} mm (Area: {result.patch_area_mm2:.0f} mm²)",
             f"  Patch Size Status:         {'VALID (>= 50x50 mm)' if patch_valid else 'WARNING (< 50x50 mm recommended)'}",
             f"  Raw Points:                {result.points:,}",
             f"  Processed Points:          {result.processed_points:,}",
-            f"  Avg Point Spacing (§8.2):  {spacing:.3f} mm (~{density:.1f} pts/mm²)",
+            f"  Avg Point Spacing:         {spacing:.3f} mm (~{density:.1f} pts/mm²)",
             f"  Point Density Status:      {'VALID (<= 0.20 mm spacing)' if density_valid else 'WARNING (> 0.20 mm required)'}",
             f"  Grid:                      {result.grid.shape[1]} × {result.grid.shape[0]} cells, pitch={result.grid_pitch_mm:.4f} mm" if result.grid is not None else "  Grid: None",
             "",
             "───────────────────────────────────────────────────────",
-            "  Visual Comparator Equivalents (Appendices X1-X3)",
+            "  Visual Comparator Equivalents",
             "───────────────────────────────────────────────────────",
         ]
     )

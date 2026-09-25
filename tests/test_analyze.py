@@ -37,7 +37,7 @@ class TestRoughnessAnalysis(unittest.TestCase):
 
         # Test report formatting
         report = format_report(result)
-        self.assertIn("ASTM WK92969 Surface Variogram Roughness", report)
+        self.assertIn("Surface Variogram Roughness", report)
         self.assertIn("Sa", report)
 
         # Test metrics JSON save

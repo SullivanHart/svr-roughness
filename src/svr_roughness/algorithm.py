@@ -30,6 +30,7 @@ class PurePythonResult(NamedTuple):
     grid_height: int
     grid_origin_mm: np.ndarray
     grid_z_mm: np.ndarray
+    elevation_grid_mm: np.ndarray = None
     noise_floor_um: float = 0.0
     svr_raw_um: float = 0.0
 
@@ -212,10 +213,11 @@ def rasterize_elevation_grid(
         raise ValueError("Insufficient contiguous surface area to form a valid roughness grid")
     grid_z = grid_z[y_begin:y_end, x_begin:x_end]
     valid = valid[y_begin:y_end, x_begin:x_end]
+    raw_valid = valid.copy()
     origin_x = min_x + x_begin * pitch_m
     origin_y = min_y + y_begin * pitch_m
 
-    # Fill interior holes (fillHolesInGrid: fast 4-connected 8-pass iterative propagation)
+    # Fill interior holes for Gaussian filtration (fillHolesInGrid: fast 4-connected 8-pass iterative propagation)
     if np.any(~valid) and np.any(valid):
         filled_z = grid_z.copy()
         current_valid = valid.copy()
@@ -260,12 +262,10 @@ def rasterize_elevation_grid(
         if np.any(~current_valid):
             mean_z = np.nanmean(filled_z)
             filled_z[~current_valid] = mean_z
-            current_valid[:] = True
 
         grid_z = filled_z
-        valid = current_valid
 
-    return grid_z, valid, origin_x, origin_y
+    return grid_z, raw_valid, origin_x, origin_y
 
 
 def iso_gaussian_filter_1d_kernel(cutoff_m: float, pitch_m: float) -> np.ndarray:
@@ -537,6 +537,7 @@ def analyze_pure_python(
 
     height, width = roughness_z_m.shape
     grid_z_mm = roughness_z_m * 1000.0
+    elevation_grid_mm = grid_z_m * 1000.0
 
     return PurePythonResult(
         sa_um=sa_um,
@@ -549,6 +550,7 @@ def analyze_pure_python(
         grid_height=height,
         grid_origin_mm=np.array([origin_x_m * 1000.0, origin_y_m * 1000.0, voxel_size_mm], dtype=np.float64),
         grid_z_mm=grid_z_mm,
+        elevation_grid_mm=elevation_grid_mm,
         noise_floor_um=noise_floor_um,
         svr_raw_um=svr_raw_um,
     )

@@ -3,10 +3,13 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import fields, replace
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import numpy.typing as npt
+
+if TYPE_CHECKING:
+    from .decomposition import DecompositionConfig, ObjectRoughnessResult
 
 from ._display_grid import crop_points, fit_plane_basis
 from .algorithm import analyze_pure_python
@@ -86,6 +89,7 @@ def analyze_points(
         processed_points=pure_res.processed_points,
         plane=plane,
         grid=pure_res.grid_z_mm,
+        elevation_grid=pure_res.elevation_grid_mm,
         grid_pitch_mm=float(resolved.grid_mm),
         grid_origin_mm=pure_res.grid_origin_mm,
         variogram_bins_um=pure_res.variogram_bins_um,
@@ -98,12 +102,60 @@ def analyze_file(
     path: str | Path,
     config: RoughnessConfig | None = None,
     progress: Callable[[str, float], None] | None = None,
+    auto_decompose: bool = False,
+    decomp_config: DecompositionConfig | None = None,
     **overrides: Any,
-) -> RoughnessResult:
+) -> RoughnessResult | ObjectRoughnessResult:
+    if auto_decompose:
+        return analyze_object(
+            path,
+            config=config,
+            decomp_config=decomp_config,
+            progress=progress,
+            **overrides,
+        )
     if progress:
         progress("Loading scan", 0.05)
     points = load_points(path)
     return analyze_points(points, config, progress=progress, **overrides)
+
+
+def analyze_object(
+    points_or_file: str | Path | npt.ArrayLike,
+    config: RoughnessConfig | None = None,
+    decomp_config: DecompositionConfig | None = None,
+    progress: Callable[[str, float], None] | None = None,
+    **overrides: Any,
+) -> ObjectRoughnessResult:
+    """Analyze a 3D object scan by segmenting it into ASTM WK92969 planar faces.
+
+    Parameters
+    ----------
+    points_or_file : str, Path, or Nx3 array
+        Point cloud file path or Nx3 XYZ coordinate array in mm.
+    config : RoughnessConfig, optional
+        Metrology configuration (grid pitch, cutoffs, noise subtraction).
+    decomp_config : DecompositionConfig, optional
+        Decomposition parameters (plane distance, edge margins, min area).
+    progress : callable, optional
+        Progress callback taking (status_text, percent_0_to_1).
+    **overrides : Any
+        Keyword arguments to override fields in RoughnessConfig.
+
+    Returns
+    -------
+    ObjectRoughnessResult
+        Container holding segmented surface patches and multi-face metrology.
+    """
+    from .decomposition import decompose_3d_object
+
+    resolved = _resolve_config(config, overrides)
+    return decompose_3d_object(
+        points_or_file,
+        config=resolved,
+        decomp_config=decomp_config,
+        progress=progress,
+    )
 
 
 def analyze_ply(
