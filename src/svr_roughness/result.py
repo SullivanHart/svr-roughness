@@ -66,14 +66,16 @@ class RoughnessResult:
         """Width of the surface patch along the fitted plane X-axis in mm."""
         if self.plane is None or len(self.plane.coords) == 0:
             return float(self.grid.shape[1] * self.grid_pitch_mm) if self.grid is not None else 0.0
-        return float(self.plane.coords[:, 0].max() - self.plane.coords[:, 0].min())
+        w = float(self.plane.coords[:, 0].max() - self.plane.coords[:, 0].min())
+        return w if w > 0.0 else (float(self.grid.shape[1] * self.grid_pitch_mm) if self.grid is not None else 0.0)
 
     @property
     def patch_height_mm(self) -> float:
         """Height of the surface patch along the fitted plane Y-axis in mm."""
         if self.plane is None or len(self.plane.coords) == 0:
             return float(self.grid.shape[0] * self.grid_pitch_mm) if self.grid is not None else 0.0
-        return float(self.plane.coords[:, 1].max() - self.plane.coords[:, 1].min())
+        h = float(self.plane.coords[:, 1].max() - self.plane.coords[:, 1].min())
+        return h if h > 0.0 else (float(self.grid.shape[0] * self.grid_pitch_mm) if self.grid is not None else 0.0)
 
     @property
     def patch_area_mm2(self) -> float:

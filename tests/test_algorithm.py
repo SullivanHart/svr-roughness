@@ -95,6 +95,38 @@ class TestAlgorithm(unittest.TestCase):
         self.assertEqual(grid_svr.shape, (100, 100))
         self.assertTrue(np.any(np.isfinite(grid_svr)))
 
+    def test_variogram_uses_only_measured_pairs_and_all_configured_bins(self):
+        grid = np.full((8, 8), 0.0001)
+        mask = np.zeros((8, 8), dtype=bool)
+        mask[2:6, 2:6] = True
+        sa, sq, svr, bins, counts = compute_variogram_and_svr(
+            grid, pitch_m=0.001, points_on_var=5, span_m=0.001, valid_mask=mask
+        )
+        self.assertAlmostEqual(sa, 100.0)
+        self.assertAlmostEqual(sq, 100.0)
+        self.assertAlmostEqual(svr, 0.0, delta=1e-4)
+        self.assertEqual(counts[0], 0)
+        self.assertLess(sum(counts), 8 * 8 * 5 * 5)
+        self.assertTrue(np.all(np.isfinite(bins)))
+
+        # Only the first occupied distance bucket contributes to the ASTM divisor.
+        step = np.array([[0.0, 0.0001]])
+        _, _, small_svr, small_bins, small_counts = compute_variogram_and_svr(
+            step, pitch_m=0.001, points_on_var=4, span_m=0.002
+        )
+        self.assertEqual(int(np.count_nonzero(small_counts)), 1)
+        self.assertAlmostEqual(small_svr, float(small_bins.sum() / 4))
+
+        masked_step = np.full((4, 4), np.nan)
+        masked_step[1, 1] = 0.0
+        masked_step[1, 2] = 0.0001
+        _, _, masked_svr, masked_bins, masked_counts = compute_variogram_and_svr(
+            masked_step, pitch_m=0.001, points_on_var=2, span_m=0.002
+        )
+        self.assertEqual(masked_counts.tolist(), [2, 0])
+        self.assertAlmostEqual(masked_bins[0], 100.0 / np.sqrt(2), places=5)
+        self.assertAlmostEqual(masked_svr, 100.0 / (2 * np.sqrt(2)), places=5)
+
     def test_analyze_pure_python_synthetic(self):
         # 1000 points with Gaussian noise
         rng = np.random.default_rng(99)

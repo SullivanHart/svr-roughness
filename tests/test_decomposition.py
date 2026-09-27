@@ -5,6 +5,9 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from scipy.spatial import cKDTree
+from svr_roughness.decomposition import _curvature_edge_mask, _largest_spatial_component
+
 from svr_roughness import (
     DecompositionConfig,
     ObjectRoughnessResult,
@@ -123,7 +126,7 @@ def test_single_planar_surface_passthrough() -> None:
     result = decompose_3d_object(plane_pts, config=rough_cfg)
 
     assert result.patch_count == 1
-    assert result.coverage_pct == 100.0
+    assert result.coverage_pct >= 90.0  # stat outlier filter may clip a few boundary pts
     assert result.dominant_patch.is_astm_compliant is True
     assert result.dominant_patch.roughness.svr_um > 0.0
 
@@ -164,3 +167,37 @@ def test_real_scrata_cube_decomposition() -> None:
     assert result.total_points > 700000
     assert result.worst_svr_um > result.best_svr_um
     assert result.worst_svr_um > 100.0  # Mixed cube contains a very rough face (>A4)
+
+
+def test_curvature_detects_corner_without_relying_on_other_plane_models() -> None:
+    coords = np.arange(0.0, 20.0, 0.5)
+    x, y = np.meshgrid(coords, coords)
+    top = np.column_stack((x.ravel(), y.ravel(), np.zeros(x.size)))
+    side = np.column_stack((x.ravel(), np.zeros(x.size), y.ravel()))
+    cloud = np.vstack((top, side))
+    cfg = DecompositionConfig(edge_curvature_threshold=0.02)
+    top_indices = np.arange(len(top))
+    edges = _curvature_edge_mask(cloud, top_indices, cfg, cKDTree(cloud))
+    near_corner = top[:, 1] < 1.0
+    interior = top[:, 1] > 8.0
+    assert edges[near_corner].mean() > 0.5
+    assert edges[interior].mean() < 0.05
+
+
+def test_interior_rough_spot_is_not_removed_as_an_edge() -> None:
+    coords = np.arange(0.0, 30.0, 0.5)
+    x, y = np.meshgrid(coords, coords)
+    z = 2.0 * np.exp(-((x - 15.0) ** 2 + (y - 15.0) ** 2) / 2.0)
+    points = np.column_stack((x.ravel(), y.ravel(), z.ravel()))
+    mask = _curvature_edge_mask(points, np.arange(len(points)), DecompositionConfig(), cKDTree(points))
+    central_spot = (x.ravel() - 15.0) ** 2 + (y.ravel() - 15.0) ** 2 < 4.0
+    assert not mask[central_spot].any()
+
+
+def test_spatial_component_excludes_remote_coplanar_fixture() -> None:
+    x, y = np.meshgrid(np.arange(0.0, 20.0), np.arange(0.0, 20.0))
+    surface = np.column_stack((x.ravel(), y.ravel(), np.zeros(x.size)))
+    fixture = surface[:16].copy() + np.array([100.0, 0.0, 0.0])
+    keep = _largest_spatial_component(np.vstack((surface, fixture)), 2.0)
+    assert keep[:len(surface)].all()
+    assert not keep[len(surface):].any()

@@ -33,6 +33,10 @@ class PurePythonResult(NamedTuple):
     elevation_grid_mm: np.ndarray = None
     noise_floor_um: float = 0.0
     svr_raw_um: float = 0.0
+    plane_centroid_mm: np.ndarray = None
+    plane_normal: np.ndarray = None
+    plane_x_axis: np.ndarray = None
+    plane_y_axis: np.ndarray = None
 
 
 def voxel_downsample(points_m: np.ndarray, voxel_size_m: float) -> np.ndarray:
@@ -62,7 +66,7 @@ def voxel_downsample(points_m: np.ndarray, voxel_size_m: float) -> np.ndarray:
 
 
 def pca_align_plane(points_m: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Align point cloud surface normal to +Z axis using PCA eigendecomposition (matching PCL PCA)."""
+    """Align point cloud surface normal to +Z axis and oriented bounding box (OBB) to X/Y axes."""
     centroid = points_m.mean(axis=0)
     centered = points_m - centroid
     cov = (centered.T @ centered) / max(len(points_m), 1)
@@ -76,6 +80,28 @@ def pca_align_plane(points_m: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.nd
     if np.linalg.det(eig_vecs) < 0:
         eig_vecs[:, 2] = -eig_vecs[:, 2]
 
+    # 2D Oriented Bounding Box (OBB) search to align X/Y axes with physical edges
+    if len(centered) > 20:
+        u0 = centered @ eig_vecs[:, 0]
+        v0 = centered @ eig_vecs[:, 1]
+        angles = np.linspace(0, np.pi / 2, 90)
+        min_area = float("inf")
+        best_ang = 0.0
+        for ang in angles:
+            cos_a, sin_a = np.cos(ang), np.sin(ang)
+            ru = cos_a * u0 - sin_a * v0
+            rv = sin_a * u0 + cos_a * v0
+            area = float(np.ptp(ru) * np.ptp(rv))
+            if area < min_area:
+                min_area = area
+                best_ang = float(ang)
+
+        cos_b, sin_b = np.cos(best_ang), np.sin(best_ang)
+        x_ax = cos_b * eig_vecs[:, 0] - sin_b * eig_vecs[:, 1]
+        y_ax = sin_b * eig_vecs[:, 0] + cos_b * eig_vecs[:, 1]
+        z_ax = eig_vecs[:, 2]
+        eig_vecs = np.column_stack([x_ax, y_ax, z_ax])
+
     # Rotate points into plane coordinates (col 0 -> X, col 1 -> Y, col 2 -> Z)
     rotated = centered @ eig_vecs
 
@@ -86,85 +112,13 @@ def pca_align_plane(points_m: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.nd
     return rotated, centroid, eig_vecs
 
 
-def _crop_grid_boundaries(valid_mask: np.ndarray) -> tuple[int, int, int, int]:
-    """Shave invalid boundary borders matching cropPointCloud in cloud_viewer.cpp.
-
-    Returns (y_begin, y_end, x_begin, x_end).
-    """
-    missing_xy = (~valid_mask).T
-    dim_x, dim_y = missing_xy.shape
-
-    missing_data = np.zeros((dim_x, dim_y), dtype=np.uint8)
-    missing_data[missing_xy] = 1
-
-    seen = np.zeros((dim_x, dim_y), dtype=bool)
-    dr = [0, 1, 0, -1]
-    dc = [1, 0, -1, 0]
-    r, c, di = 0, 0, 0
-    order: list[tuple[int, int]] = []
-
-    for _ in range(dim_x * dim_y):
-        order.append((r, c))
-        seen[r, c] = True
-        cr = r + dr[di]
-        cc = c + dc[di]
-        if 0 <= cr < dim_x and 0 <= cc < dim_y and not seen[cr, cc]:
-            r, c = cr, cc
-        else:
-            di = (di + 1) % 4
-            r += dr[di]
-            c += dc[di]
-
-    for r, c in order:
-        if missing_data[r, c] == 1:
-            if r == 0 or r == dim_x - 1 or c == 0 or c == dim_y - 1:
-                missing_data[r, c] = 2
-            elif (
-                (r > 0 and missing_data[r - 1, c] == 2)
-                or (r < dim_x - 1 and missing_data[r + 1, c] == 2)
-                or (c > 0 and missing_data[r, c - 1] == 2)
-                or (c < dim_y - 1 and missing_data[r, c + 1] == 2)
-            ):
-                missing_data[r, c] = 2
-
-    x_begin, x_end = 0, dim_x
-    y_begin, y_end = 0, dim_y
-    changed = True
-    while changed:
-        if x_begin >= x_end or y_begin >= y_end:
-            return 0, 0, 0, 0
-        changed = False
-        for x in range(x_begin, x_end):
-            if missing_data[x, y_begin] == 2:
-                y_begin += 1
-                changed = True
-                break
-        for y in range(y_begin, y_end):
-            if missing_data[x_end - 1, y] == 2:
-                x_end -= 1
-                changed = True
-                break
-        for x in range(x_begin, x_end):
-            if missing_data[x, y_end - 1] == 2:
-                y_end -= 1
-                changed = True
-                break
-        for y in range(y_begin, y_end):
-            if missing_data[x_begin, y] == 2:
-                x_begin += 1
-                changed = True
-                break
-
-    return y_begin, y_end, x_begin, x_end
-
-
 def rasterize_elevation_grid(
     rotated_pts_m: np.ndarray,
     pitch_m: float,
 ) -> tuple[np.ndarray, np.ndarray, float, float]:
     """Rasterize 3D points onto regular 2D elevation grid using bilinear scatter interpolation.
 
-    Matches createDenseGridPointCloud and cropPointCloud in cloud_viewer.cpp.
+    Preserves the true physical contour and organic boundaries of all scanned points.
     """
     min_x, min_y = float(rotated_pts_m[:, 0].min()), float(rotated_pts_m[:, 1].min())
     max_x, max_y = float(rotated_pts_m[:, 0].max()), float(rotated_pts_m[:, 1].max())
@@ -207,20 +161,23 @@ def rasterize_elevation_grid(
     grid_z[valid] = grid_sum_zw[valid] / grid_sum_w[valid]
     grid_z[~valid] = np.nan
 
-    # Shave outer missing boundaries (cropPointCloud)
-    y_begin, y_end, x_begin, x_end = _crop_grid_boundaries(valid)
-    if y_begin >= y_end or x_begin >= x_end:
-        raise ValueError("Insufficient contiguous surface area to form a valid roughness grid")
+    # Trim only purely empty boundary rows and columns (preserving full organic shape)
+    valid_rows = np.where(valid.any(axis=1))[0]
+    valid_cols = np.where(valid.any(axis=0))[0]
+    if len(valid_rows) == 0 or len(valid_cols) == 0:
+        raise ValueError("Insufficient points to form a valid surface grid")
+    y_begin, y_end = int(valid_rows[0]), int(valid_rows[-1] + 1)
+    x_begin, x_end = int(valid_cols[0]), int(valid_cols[-1] + 1)
+
     grid_z = grid_z[y_begin:y_end, x_begin:x_end]
-    valid = valid[y_begin:y_end, x_begin:x_end]
-    raw_valid = valid.copy()
+    raw_valid = valid[y_begin:y_end, x_begin:x_end].copy()
     origin_x = min_x + x_begin * pitch_m
     origin_y = min_y + y_begin * pitch_m
 
-    # Fill interior holes for Gaussian filtration (fillHolesInGrid: fast 4-connected 8-pass iterative propagation)
-    if np.any(~valid) and np.any(valid):
-        filled_z = grid_z.copy()
-        current_valid = valid.copy()
+    # Fill interior micro-holes for Gaussian filtration stability while strictly preserving raw_valid mask
+    filled_z = grid_z.copy()
+    if np.any(~raw_valid) and np.any(raw_valid):
+        current_valid = raw_valid.copy()
         for _ in range(8):
             if np.all(current_valid):
                 break
@@ -261,11 +218,9 @@ def rasterize_elevation_grid(
 
         if np.any(~current_valid):
             mean_z = np.nanmean(filled_z)
-            filled_z[~current_valid] = mean_z
+            filled_z[~current_valid] = mean_z if np.isfinite(mean_z) else 0.0
 
-        grid_z = filled_z
-
-    return grid_z, raw_valid, origin_x, origin_y
+    return filled_z, raw_valid, origin_x, origin_y
 
 
 def iso_gaussian_filter_1d_kernel(cutoff_m: float, pitch_m: float) -> np.ndarray:
@@ -350,6 +305,7 @@ def compute_variogram_and_svr(
     pitch_m: float,
     points_on_var: int = 10,
     span_m: float = 0.0005,
+    valid_mask: np.ndarray | None = None,
 ) -> tuple[float, float, float, np.ndarray, np.ndarray]:
     """Compute ASTM WK92969 Sa, Sq, Svr, and variogram buckets.
 
@@ -357,73 +313,55 @@ def compute_variogram_and_svr(
     """
     height, width = roughness_z_m.shape
 
-    # Sa and Sq in micrometers
-    sa_um = float(np.mean(np.abs(roughness_z_m)) * 1e6)
-    sq_um = float(np.sqrt(np.mean(roughness_z_m**2)) * 1e6)
+    # Only measured, finite cells can form valid variogram pairs.
+    mask = np.isfinite(roughness_z_m)
+    if valid_mask is not None:
+        mask &= valid_mask
+    if not np.any(mask):
+        raise ValueError("No measured cells available for variogram calculation")
+    valid_z = roughness_z_m[mask]
+    sa_um = float(np.mean(np.abs(valid_z)) * 1e6)
+    sq_um = float(np.sqrt(np.mean(valid_z**2)) * 1e6)
 
-    # Evaluation length parameter setup
     max_ev_m = points_on_var * span_m
     max_cells = int(math.ceil(max_ev_m / pitch_m))
-
-    z_um = roughness_z_m * 1e6
+    z_um = np.where(mask, roughness_z_m, 0.0) * 1e6
+    weights = mask.astype(np.float64)
     pad_h = height + max_cells + 1
     pad_w = width + max_cells + 1
 
-    # Global Variogram via 2D FFT Autocorrelation
+    # Cross-correlations count measured pairs and their two squared terms.
     z_fft = np.fft.rfft2(z_um, s=(pad_h, pad_w))
+    mask_fft = np.fft.rfft2(weights, s=(pad_h, pad_w))
+    z2_fft = np.fft.rfft2(z_um**2, s=(pad_h, pad_w))
     autocorr = np.fft.irfft2(z_fft * np.conj(z_fft), s=(pad_h, pad_w))
-    integral_sq = np.pad(np.cumsum(np.cumsum(z_um**2, axis=0), axis=1), ((1, 0), (1, 0)))
+    valid_pairs = np.fft.irfft2(mask_fft * np.conj(mask_fft), s=(pad_h, pad_w))
+    src_sq = np.fft.irfft2(z2_fft * np.conj(mask_fft), s=(pad_h, pad_w))
+    dst_sq = np.fft.irfft2(mask_fft * np.conj(z2_fft), s=(pad_h, pad_w))
 
     var_sums = np.zeros(points_on_var, dtype=np.float64)
     var_counts = np.zeros(points_on_var, dtype=np.int64)
-
     for dy in range(max_cells + 1):
         for dx in range(-max_cells, max_cells + 1):
             if dy == 0 and dx <= 0:
                 continue
-            dist = math.sqrt((dx * pitch_m) ** 2 + (dy * pitch_m) ** 2)
+            dist = math.hypot(dx * pitch_m, dy * pitch_m)
             b = int(math.floor(dist / span_m))
             if b >= points_on_var:
                 continue
-
-            y_src0 = dy
-            y_src1 = height
-            x_src0 = max(0, dx)
-            x_src1 = min(width, width + dx)
-
-            y_dst0 = 0
-            y_dst1 = height - dy
-            x_dst0 = max(0, -dx)
-            x_dst1 = min(width, width - dx)
-
-            s1 = (
-                integral_sq[y_src1, x_src1]
-                - integral_sq[y_src0, x_src1]
-                - integral_sq[y_src1, x_src0]
-                + integral_sq[y_src0, x_src0]
-            )
-            s2 = (
-                integral_sq[y_dst1, x_dst1]
-                - integral_sq[y_dst0, x_dst1]
-                - integral_sq[y_dst1, x_dst0]
-                + integral_sq[y_dst0, x_dst0]
-            )
-
-            ac_col = dx if dx >= 0 else pad_w + dx
-            prod = autocorr[dy, ac_col]
-
-            diff_sq_sum = s1 + s2 - 2.0 * prod
-            n_pairs = (height - dy) * (width - abs(dx))
-
-            var_sums[b] += 2.0 * diff_sq_sum
-            var_counts[b] += 2 * n_pairs
+            col = dx if dx >= 0 else pad_w + dx
+            count = int(round(float(valid_pairs[dy, col])))
+            if count <= 0:
+                continue
+            diff_sq = max(0.0, float(src_sq[dy, col] + dst_sq[dy, col] - 2.0 * autocorr[dy, col]))
+            var_sums[b] += 2.0 * diff_sq
+            var_counts[b] += 2 * count
 
     var_bins_um = np.zeros(points_on_var, dtype=np.float64)
-    valid_bins = var_counts > 0
-    var_bins_um[valid_bins] = np.sqrt(var_sums[valid_bins] / (2.0 * var_counts[valid_bins]))
-
-    # Svr is mean of variogram bins (ASTM WK92969 & SurfInspect)
-    svr_um = float(np.mean(var_bins_um[valid_bins])) if np.any(valid_bins) else 0.0
+    occupied = var_counts > 0
+    var_bins_um[occupied] = np.sqrt(np.maximum(0.0, var_sums[occupied] / (2.0 * var_counts[occupied])))
+    # WK92969 §9.2 defines N(b) as the number of configured distance buckets.
+    svr_um = float(np.sum(var_bins_um) / points_on_var)
 
     return sa_um, sq_um, svr_um, var_bins_um, var_counts
 
@@ -432,6 +370,7 @@ def compute_heatmap_grid(
     roughness_grid_mm: np.ndarray,
     pitch_mm: float,
     radius_mm: float = 5.0,
+    min_support_cells: int = 12,
 ) -> np.ndarray:
     """Compute local Svr spatial roughness heatmap (in µm) via 2D FFT convolution.
 
@@ -439,6 +378,8 @@ def compute_heatmap_grid(
         roughness_grid_mm: 2D array of Gaussian-filtered roughness elevation in mm.
         pitch_mm: Grid cell spacing in mm.
         radius_mm: Local circular evaluation radius in mm (default: 5.0 mm).
+        min_support_cells: Minimum number of valid neighboring cells within radius_mm
+            required to evaluate local variance (default: 12).
 
     Returns:
         2D float64 array of local Svr values in micrometers (µm).
@@ -463,14 +404,75 @@ def compute_heatmap_grid(
     conv_z = _fft_convolve2d_same(z_clean, kernel)
     conv_z2 = _fft_convolve2d_same(z_clean**2, kernel)
 
-    pixel_sum_sq = w_local * (z_clean**2) + conv_z2 - 2.0 * z_clean * conv_z
-    pixel_sum_sq = np.maximum(pixel_sum_sq, 0.0)
+    # Detrended local variance: Var(z) = E[z^2] - (E[z])^2
+    # In ASTM WK92969 §9.2, v(d) = sqrt(1/(2N) sum (zi - zj)^2)
+    # The expected RMS pair difference across the circular neighborhood is sqrt(2 * Var(z)).
+    mean_local = conv_z / np.maximum(w_local, 1e-12)
+    var_local = np.maximum(0.0, (conv_z2 / np.maximum(w_local, 1e-12)) - mean_local**2)
 
-    valid_cells = (w_local >= 3.0) & finite_mask
+    min_support = max(4.0, float(min_support_cells))
+    valid_cells = (w_local >= min_support) & finite_mask
     heatmap_um = np.full_like(z_um, np.nan)
-    heatmap_um[valid_cells] = np.sqrt(pixel_sum_sq[valid_cells] / w_local[valid_cells])
+    heatmap_um[valid_cells] = np.sqrt(2.0 * var_local[valid_cells])
 
     return heatmap_um
+
+
+def interpolate_heatmap_at_points(
+    hmap: np.ndarray,
+    origin_x_mm: float,
+    origin_y_mm: float,
+    pitch_mm: float,
+    u_mm: np.ndarray,
+    v_mm: np.ndarray,
+) -> np.ndarray:
+    """Continuously evaluate local Svr heatmap at arbitrary point coordinates via bilinear interpolation.
+
+    Performs smooth, mathematically rigorous sampling of the areal roughness field
+    without nearest-neighbor inpainting or discrete grid index clipping.
+    """
+    fx = (u_mm - origin_x_mm) / pitch_mm
+    fy = (v_mm - origin_y_mm) / pitch_mm
+
+    h, w = hmap.shape
+    ix0 = np.clip(np.floor(fx).astype(np.int32), 0, w - 2)
+    iy0 = np.clip(np.floor(fy).astype(np.int32), 0, h - 2)
+    ix1 = ix0 + 1
+    iy1 = iy0 + 1
+
+    dx = np.clip(fx - ix0, 0.0, 1.0)
+    dy = np.clip(fy - iy0, 0.0, 1.0)
+
+    v00 = hmap[iy0, ix0]
+    v10 = hmap[iy0, ix1]
+    v01 = hmap[iy1, ix0]
+    v11 = hmap[iy1, ix1]
+
+    w00 = (1.0 - dx) * (1.0 - dy)
+    w10 = dx * (1.0 - dy)
+    w01 = (1.0 - dx) * dy
+    w11 = dx * dy
+
+    m00 = np.isfinite(v00)
+    m10 = np.isfinite(v10)
+    m01 = np.isfinite(v01)
+    m11 = np.isfinite(v11)
+
+    sum_vals = (
+        np.where(m00, w00 * v00, 0.0)
+        + np.where(m10, w10 * v10, 0.0)
+        + np.where(m01, w01 * v01, 0.0)
+        + np.where(m11, w11 * v11, 0.0)
+    )
+    sum_weights = (
+        np.where(m00, w00, 0.0)
+        + np.where(m10, w10, 0.0)
+        + np.where(m01, w01, 0.0)
+        + np.where(m11, w11, 0.0)
+    )
+
+    out = np.where(sum_weights > 1e-6, sum_vals / np.maximum(sum_weights, 1e-12), np.nan)
+    return out.astype(np.float32)
 
 
 def analyze_pure_python(
@@ -500,14 +502,15 @@ def analyze_pure_python(
     long_cutoff_m = long_cutoff_mm * 0.001
     span_m = variogram_span_mm * 0.001
 
-    # Step 2: Voxel Grid Downsampling
+    # Step 2: Voxel Grid Downsampling (fast robust plane fitting)
     downsampled_m = voxel_downsample(pts_m, voxel_size_m)
 
-    # Step 3: Form Removal via PCA Plane Fitting
-    rotated_m, _, _ = pca_align_plane(downsampled_m)
+    # Step 3: Form Removal via PCA Plane Fitting & 2D OBB Alignment
+    _, _, eig_vecs = pca_align_plane(downsampled_m)
+    all_rotated_m = pts_m @ eig_vecs
 
-    # Step 4: 2.5D Regular Elevation Grid Rasterization
-    grid_z_m, valid_mask, origin_x_m, origin_y_m = rasterize_elevation_grid(rotated_m, voxel_size_m)
+    # Step 4: 2.5D Regular Elevation Grid Rasterization (encompassing all scanned points)
+    grid_z_m, valid_mask, origin_x_m, origin_y_m = rasterize_elevation_grid(all_rotated_m, voxel_size_m)
 
     # Dynamic instrument noise estimation on elevation grid via 2D discrete Laplacian MAD:
     lap = _fft_convolve2d_same(grid_z_m, np.array([[0.0, 1.0, 0.0], [1.0, -4.0, 1.0], [0.0, 1.0, 0.0]], dtype=np.float64))
@@ -521,12 +524,13 @@ def analyze_pure_python(
     # Step 5: Dual-Pass ISO 16610-61 Gaussian Filtration
     roughness_z_m = apply_dual_pass_gaussian_filter(grid_z_m, voxel_size_m, short_cutoff_m, long_cutoff_m)
 
-    # Step 6: Variogram & Svr Metrology
+    # Step 6: Variogram & Svr Metrology on valid points
     sa_um, sq_um, svr_raw_um, var_bins_um, var_counts = compute_variogram_and_svr(
         roughness_z_m,
         voxel_size_m,
         variogram_points,
         span_m,
+        valid_mask=valid_mask,
     )
 
     # Single definitive Svr measurement (with dynamic noise floor subtraction if enabled)
@@ -536,8 +540,8 @@ def analyze_pure_python(
         svr_um = svr_raw_um
 
     height, width = roughness_z_m.shape
-    grid_z_mm = roughness_z_m * 1000.0
-    elevation_grid_mm = grid_z_m * 1000.0
+    grid_z_mm = np.where(valid_mask, roughness_z_m * 1000.0, np.nan)
+    elevation_grid_mm = np.where(valid_mask, grid_z_m * 1000.0, np.nan)
 
     return PurePythonResult(
         sa_um=sa_um,
@@ -553,5 +557,9 @@ def analyze_pure_python(
         elevation_grid_mm=elevation_grid_mm,
         noise_floor_um=noise_floor_um,
         svr_raw_um=svr_raw_um,
+        plane_centroid_mm=centroid,
+        plane_normal=eig_vecs[:, 2],
+        plane_x_axis=eig_vecs[:, 0],
+        plane_y_axis=eig_vecs[:, 1],
     )
 

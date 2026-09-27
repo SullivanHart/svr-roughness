@@ -73,8 +73,24 @@ def analyze_points(
         subtract_noise=resolved.subtract_noise,
     )
 
-    # ── Plane fit for metadata ──
-    plane = fit_plane_basis(selected)
+    # ── Plane fit synchronized with grid rasterization coordinate frame ──
+    from .result import PlaneFit
+    if pure_res.plane_centroid_mm is not None:
+        diff_sel = selected - pure_res.plane_centroid_mm
+        coords_sel = np.column_stack((
+            np.dot(diff_sel, pure_res.plane_x_axis),
+            np.dot(diff_sel, pure_res.plane_y_axis),
+            np.dot(diff_sel, pure_res.plane_normal),
+        ))
+        plane = PlaneFit(
+            centroid=pure_res.plane_centroid_mm,
+            normal=pure_res.plane_normal,
+            x_axis=pure_res.plane_x_axis,
+            y_axis=pure_res.plane_y_axis,
+            coords=coords_sel,
+        )
+    else:
+        plane = fit_plane_basis(selected)
 
     if progress:
         progress("Complete", 1.0)

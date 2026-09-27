@@ -7,6 +7,8 @@ from typing import Any
 
 import numpy as np
 import numpy.typing as npt
+from scipy import ndimage
+from scipy.spatial import cKDTree
 
 from .algorithm import analyze_pure_python
 from .config import RoughnessConfig
@@ -18,8 +20,12 @@ from .result import RoughnessResult, format_report
 class DecompositionConfig:
     """Configuration for 3D multi-patch surface decomposition."""
 
-    plane_distance_thresh_mm: float = 2.0
-    edge_margin_mm: float = 1.5
+    plane_distance_thresh_mm: float = 1.5
+    edge_margin_mm: float = 3.0  # expansion radius around curvature-flagged edge seeds
+    edge_neighbor_radius_mm: float = 4.5
+    edge_neighbor_count: int = 120
+    edge_curvature_threshold: float = 0.02
+    cluster_cell_mm: float = 2.0
     min_patch_points: int = 5000
     min_patch_area_mm2: float = 400.0
     astm_min_area_mm2: float = 2500.0  # ASTM WK92969 §3.1.5 recommends >= 50x50 mm
@@ -45,6 +51,7 @@ class SurfacePatchResult:
     is_astm_compliant: bool
     roughness: RoughnessResult
     points: np.ndarray = field(repr=False)
+    invalid_points: np.ndarray = field(default_factory=lambda: np.zeros((0, 3)), repr=False)
 
     def to_dict(self) -> dict[str, Any]:
         """Convert patch result to clean JSON-serializable dictionary."""
@@ -166,6 +173,156 @@ def is_planar_surface(
     return bool(flatness < flatness_ratio_thresh and thickness_ratio < 0.25)
 
 
+def _near_face_boundary(points: np.ndarray, radius_mm: float, cell_mm: float = 1.0) -> np.ndarray:
+    """Locate the outer contour without treating enclosed scan gaps as part edges."""
+    if len(points) == 0:
+        return np.zeros(0, dtype=bool)
+    centered = points - points.mean(axis=0)
+    _, _, axes = np.linalg.svd(centered, full_matrices=False)
+    uv = centered @ axes[:2].T
+    cells = np.floor((uv - uv.min(axis=0)) / cell_mm).astype(np.int64)
+    shape = cells.max(axis=0) + 1
+    if np.prod(shape) > max(4_000_000, len(points) * 100):
+        return np.zeros(len(points), dtype=bool)
+    occupied = np.zeros(tuple(shape + 2), dtype=bool)
+    occupied[cells[:, 0] + 1, cells[:, 1] + 1] = True
+    # Close narrow scanner gaps before filling interior holes. The padding keeps
+    # the actual exterior outside the scan rather than at the array boundary.
+    occupied = ndimage.binary_closing(occupied, structure=np.ones((3, 3), dtype=bool))
+    occupied = ndimage.binary_fill_holes(occupied)
+    distance = ndimage.distance_transform_edt(occupied) * cell_mm
+    return distance[cells[:, 0] + 1, cells[:, 1] + 1] <= radius_mm
+
+
+def _curvature_edge_mask(
+    points: np.ndarray,
+    candidates: np.ndarray,
+    config: DecompositionConfig,
+    tree: cKDTree,
+) -> np.ndarray:
+    """Flag locally non-planar points via covariance eigenvalue ratio (Bazazian 2015).
+
+    σ = λ_min / (λ_min + λ_mid + λ_max) measures how planar a point's local
+    neighborhood is. On a flat surface σ ≈ 0; on an edge/corner σ > 0.01-0.03.
+
+    Unlike the old plane-distance approach, this is geometry-independent: it
+    works on cubes, cylinders, fillets, and organic castings because it examines
+    the LOCAL shape rather than checking distance to other detected planes.
+
+    After flagging high-curvature seeds, expands a margin around them so the
+    transition zone between flat faces is fully excluded.
+    """
+    if len(candidates) == 0 or config.edge_curvature_threshold <= 0:
+        return np.zeros(len(candidates), dtype=bool)
+
+    # Use full-cloud tree for neighbor lookup so edge points whose neighbors
+    # span multiple faces are correctly detected as non-planar.
+    k = min(config.edge_neighbor_count, len(points))
+    flagged = np.zeros(len(candidates), dtype=bool)
+
+    for start in range(0, len(candidates), 4096):
+        end = min(start + 4096, len(candidates))
+        batch = candidates[start:end]
+        _, indices = tree.query(
+            points[batch], k=k,
+            distance_upper_bound=config.edge_neighbor_radius_mm,
+        )
+        if indices.ndim == 1:
+            indices = indices[:, None]
+
+        usable = indices < len(points)
+        counts = usable.sum(axis=1)
+
+        # Gather neighbor coordinates, masking invalid slots
+        xyz = points[np.minimum(indices, len(points) - 1)]
+        xyz = np.where(usable[..., None], xyz, 0.0)
+        mean = xyz.sum(axis=1) / np.maximum(counts[:, None], 1)
+        centered = np.where(usable[..., None], xyz - mean[:, None, :], 0.0)
+
+        # Batch covariance → eigenvalues
+        covariance = np.einsum('nki,nkj->nij', centered, centered) / np.maximum(
+            counts[:, None, None], 1,
+        )
+        eigenvalues = np.linalg.eigvalsh(covariance)  # sorted ascending
+        total_var = eigenvalues.sum(axis=1)
+        sigma = eigenvalues[:, 0] / np.maximum(total_var, 1e-12)
+
+        # Flag: must have enough neighbors AND exceed curvature threshold
+        flagged[start:end] = (counts >= 8) & (sigma > config.edge_curvature_threshold)
+
+    # Casting pits, pores, and rough surface textures in the interior of a face
+    # have elevated local curvature but are valid surface data, not part edges.
+    # Restrict edge seeds to the boundary zone of the face.
+    if np.any(flagged):
+        boundary = _near_face_boundary(
+            points[candidates], config.edge_margin_mm,
+        )
+        flagged &= boundary
+
+    # ── Expand edge margin around confirmed boundary edge seed points ──
+    # This catches the transition zone between flat face and edge/corner
+    # that individually might have borderline σ values.
+    if np.any(flagged) and config.edge_margin_mm > 0:
+        seed_pts = points[candidates[flagged]]
+        seed_tree = cKDTree(seed_pts)
+        distance, _ = seed_tree.query(
+            points[candidates],
+            distance_upper_bound=config.edge_margin_mm,
+        )
+        flagged |= (distance <= config.edge_margin_mm)
+
+    return flagged
+
+
+def _stat_outlier_filter(
+    points: np.ndarray,
+    k_neighbors: int = 6,
+    std_mul: float = 3.0,
+) -> np.ndarray:
+    """Statistical outlier removal matching C++ StatOutlierRemoval(setMeanK=6, setStddevMulThresh=3.0).
+
+    For each point, computes the mean distance to its K nearest neighbors.
+    Points whose mean neighbor distance exceeds (global_mean + std_mul * global_std)
+    are flagged as outliers (True = outlier, False = inlier).
+    """
+    if len(points) < k_neighbors + 1:
+        return np.zeros(len(points), dtype=bool)
+
+    tree = cKDTree(points)
+    k = min(k_neighbors + 1, len(points))  # +1 because query includes self
+    dists, _ = tree.query(points, k=k)
+
+    # Mean distance to K nearest neighbors (exclude self at index 0)
+    mean_dists = dists[:, 1:].mean(axis=1)
+
+    global_mean = float(np.mean(mean_dists))
+    global_std = float(np.std(mean_dists))
+    threshold = global_mean + std_mul * global_std
+
+    return mean_dists > threshold
+
+
+def _largest_spatial_component(points: np.ndarray, cell_mm: float) -> np.ndarray:
+    """Keep the largest connected occupied region in a face's local 2D plane."""
+    if len(points) == 0 or cell_mm <= 0:
+        return np.ones(len(points), dtype=bool)
+    centered = points - points.mean(axis=0)
+    _, _, axes = np.linalg.svd(centered, full_matrices=False)
+    uv = centered @ axes[:2].T
+    cells = np.floor((uv - uv.min(axis=0)) / cell_mm).astype(np.int64)
+    shape = cells.max(axis=0) + 1
+    if np.prod(shape) > max(4_000_000, len(points) * 100):
+        return np.ones(len(points), dtype=bool)
+    occupied = np.zeros(tuple(shape), dtype=bool)
+    occupied[cells[:, 0], cells[:, 1]] = True
+    labels, count = ndimage.label(occupied, structure=np.ones((3, 3), dtype=np.int8))
+    if count <= 1:
+        return np.ones(len(points), dtype=bool)
+    point_labels = labels[cells[:, 0], cells[:, 1]]
+    sizes = np.bincount(point_labels, minlength=count + 1)
+    return point_labels == np.argmax(sizes[1:]) + 1
+
+
 def decompose_3d_object(
     points_or_file: str | Path | npt.ArrayLike,
     config: RoughnessConfig | None = None,
@@ -217,8 +374,66 @@ def decompose_3d_object(
             progress("Surface identified as single planar patch", 0.40)
         from .analyze import analyze_points
 
-        roughness = analyze_points(points, config=config)
-        bbox = np.ptp(points, axis=0)
+        connected = _largest_spatial_component(points, decomp_config.cluster_cell_mm)
+        connected_idx = np.flatnonzero(connected)
+        edge_mask = _curvature_edge_mask(points, connected_idx, decomp_config, cKDTree(points))
+        clean_pts = points[connected_idx[~edge_mask]]
+        clean_idx = connected_idx[~edge_mask]
+        # Statistical outlier removal (matches C++ setMeanK=6, setStddevMulThresh=3.0)
+        if len(clean_pts) > 10:
+            outlier_mask = _stat_outlier_filter(clean_pts, k_neighbors=6, std_mul=3.0)
+            face_points = clean_pts[~outlier_mask]
+            stat_outliers = clean_pts[outlier_mask]
+        else:
+            face_points = clean_pts
+            stat_outliers = np.zeros((0, 3), dtype=np.float64)
+
+        if len(face_points) > 10:
+            c_tmp = np.mean(face_points, axis=0)
+            diff_tmp = face_points - c_tmp
+            _, _, v_tmp = np.linalg.svd((diff_tmp.T @ diff_tmp) / len(face_points))
+            z_res = np.dot(diff_tmp, v_tmp[2])
+            med_z = np.median(z_res)
+            mad_z = np.median(np.abs(z_res - med_z))
+            z_limit = max(0.40, min(decomp_config.plane_distance_thresh_mm, 4.0 * 1.4826 * mad_z))
+            valid_z = np.abs(z_res - med_z) <= z_limit
+
+            if np.any(valid_z):
+                u_res = np.dot(diff_tmp, v_tmp[0])
+                v_res = np.dot(diff_tmp, v_tmp[1])
+                sub_pts = np.column_stack((u_res[valid_z], v_res[valid_z], z_res[valid_z]))
+                min_c = sub_pts.min(axis=0)
+                voxels = np.floor((sub_pts - min_c) / 1.0).astype(int)
+                grid_shape = voxels.max(axis=0) + 1
+                if np.prod(grid_shape) < 5_000_000:
+                    vox_grid = np.zeros(tuple(grid_shape), dtype=bool)
+                    vox_grid[voxels[:, 0], voxels[:, 1], voxels[:, 2]] = True
+                    vox_labels, num_comp = ndimage.label(vox_grid, structure=ndimage.generate_binary_structure(3, 1))
+                    pt_vox = vox_labels[voxels[:, 0], voxels[:, 1], voxels[:, 2]]
+                    vox_sizes = np.bincount(pt_vox, minlength=num_comp + 1)
+                    main_comp = pt_vox == np.argmax(vox_sizes[1:]) + 1
+                    valid_z_idx = np.where(valid_z)[0]
+                    clean_mask = np.zeros(len(face_points), dtype=bool)
+                    clean_mask[valid_z_idx[main_comp]] = True
+                else:
+                    clean_mask = valid_z
+            else:
+                clean_mask = np.ones(len(face_points), dtype=bool)
+            residual_outliers = face_points[~clean_mask]
+            face_points = face_points[clean_mask]
+        else:
+            residual_outliers = np.zeros((0, 3), dtype=np.float64)
+
+        if len(face_points) < decomp_config.min_patch_points:
+            raise RuntimeError("Planar surface has too few connected, non-edge points")
+        excluded = np.concatenate((
+            points[~connected],
+            points[connected_idx[edge_mask]],
+            stat_outliers,
+            residual_outliers,
+        ), axis=0)
+        roughness = analyze_points(face_points, config=config)
+        bbox = np.ptp(face_points, axis=0)
         dims = (float(np.sort(bbox)[2]), float(np.sort(bbox)[1]))
         area = dims[0] * dims[1]
         single_patch = SurfacePatchResult(
@@ -228,23 +443,25 @@ def decompose_3d_object(
             centroid=tuple(float(x) for x in roughness.plane.centroid),
             area_mm2=area,
             dims_mm=dims,
-            point_count=total_pts,
+            point_count=len(face_points),
             is_astm_compliant=bool(area >= decomp_config.astm_min_area_mm2 and min(dims) >= 50.0),
             roughness=roughness,
-            points=points,
+            points=face_points,
+            invalid_points=excluded,
         )
         return ObjectRoughnessResult(
             patches=[single_patch],
             total_points=total_pts,
-            assigned_points=total_pts,
-            unassigned_points=0,
-            coverage_pct=100.0,
+            assigned_points=len(face_points),
+            unassigned_points=len(excluded),
+            coverage_pct=100.0 * len(face_points) / total_pts,
             mean_svr_um=roughness.svr_um,
             worst_svr_um=roughness.svr_um,
             best_svr_um=roughness.svr_um,
             dominant_patch=single_patch,
             config=config,
             decomp_config=decomp_config,
+            unassigned_points_arr=excluded,
         )
 
     # 1. Subsample for fast plane discovery
@@ -328,67 +545,118 @@ def decompose_3d_object(
     if not plane_models:
         raise RuntimeError("No dominant planar faces could be extracted from 3D object scan")
 
-    # Estimate nominal object dimensions from detected opposite parallel planes (if any)
-    opp_dists: list[float] = []
-    for i in range(len(plane_models)):
-        for j in range(i + 1, len(plane_models)):
-            ni, di, ci = plane_models[i]
-            nj, dj, cj = plane_models[j]
-            if float(np.dot(ni, nj)) < -0.8:
-                opp_dists.append(abs(float(np.dot(ci, nj) + dj)))
-    nom_size = float(np.median(opp_dists)) if opp_dists else None
-
-    # 2. Assign full-resolution points to planes
+    # 2. Simultaneous Closest-Plane Assignment
     if progress:
         progress("Assigning full-resolution points to faces", 0.35)
 
-    assigned = np.zeros(total_pts, dtype=bool)
+    dists_matrix = np.column_stack([np.abs(np.dot(points, n) + d) for n, d, c in plane_models])
+    min_dist_plane = np.argmin(dists_matrix, axis=1)
+    min_dist_val = np.min(dists_matrix, axis=1)
+
+    edge_tree = cKDTree(points)
     raw_patches: list[dict[str, Any]] = []
 
     for model_idx, (n, d, c) in enumerate(plane_models):
-        dists = np.abs(np.dot(points, n) + d)
-        cand_idx = np.where((dists < decomp_config.plane_distance_thresh_mm) & (~assigned))[0]
+        cand_mask = (min_dist_plane == model_idx) & (min_dist_val < decomp_config.plane_distance_thresh_mm)
+        cand_idx = np.where(cand_mask)[0]
         if len(cand_idx) < decomp_config.min_patch_points:
             continue
 
         cand_pts = points[cand_idx]
 
-        # Edge removal: peel away points within edge_margin_mm of non-parallel adjacent planes
-        # Points outside or within margin of adjacent plane have signed_dist > -edge_margin_mm
-        if decomp_config.edge_margin_mm > 0 and len(plane_models) > 1:
-            edge_mask = np.zeros(len(cand_pts), dtype=bool)
+        # ── Phase 1: Spatial component filter ──
+        # Remove remote coplanar fixtures / disconnected point islands
+        connected = _largest_spatial_component(cand_pts, decomp_config.cluster_cell_mm)
+        connected_idx = cand_idx[connected]
+
+        # ── Phase 2: Boundary edge peeling & curvature detection ──
+        # Peeling near adjacent non-parallel planes prevents face points from wrapping around corners/chamfers
+        connected_pts = points[connected_idx]
+        adj_edge_mask = np.zeros(len(connected_pts), dtype=bool)
+        if len(plane_models) > 1 and decomp_config.edge_margin_mm > 0:
+            cos_thresh = np.cos(np.radians(decomp_config.parallel_angle_thresh_deg))
             for j, (other_n, other_d, _) in enumerate(plane_models):
                 if model_idx == j:
                     continue
-                # Check if non-parallel (angle > threshold)
                 dot = abs(float(np.dot(n, other_n)))
-                cos_thresh = np.cos(np.radians(decomp_config.parallel_angle_thresh_deg))
                 if dot < cos_thresh:
-                    signed_dist = np.dot(cand_pts, other_n) + other_d
-                    # Signed distance: > 0 means outside adjacent boundary; [-edge_margin_mm, 0] is edge margin
-                    edge_mask |= (signed_dist > -decomp_config.edge_margin_mm)
-                    # If this adjacent direction has no opposite plane, bound by nominal thickness if known
-                    has_opp = any(
-                        float(np.dot(other_n, ok_n)) < -0.8
-                        for k, (ok_n, _, _) in enumerate(plane_models)
-                        if k != j
-                    )
-                    if not has_opp and nom_size is not None:
-                        edge_mask |= (signed_dist < -(nom_size - decomp_config.edge_margin_mm))
+                    signed_dist = np.dot(connected_pts, other_n) + other_d
+                    adj_edge_mask |= (signed_dist > -decomp_config.edge_margin_mm)
 
-            pure_pts = cand_pts[~edge_mask]
-            face_idx = cand_idx[~edge_mask]
-            if len(pure_pts) < decomp_config.min_patch_points:
-                continue
-            face_pts = pure_pts
+        # Curvature edge detection along boundaries (for chamfers / freeform transitions)
+        curv_edge_mask = _curvature_edge_mask(points, connected_idx, decomp_config, edge_tree)
+        edge_mask = adj_edge_mask | curv_edge_mask
+        clean_idx = connected_idx[~edge_mask]
+        clean_pts = points[clean_idx]
+
+        # ── Phase 3: Statistical outlier removal ──
+        # Catch remaining isolated junk with anomalous point spacing
+        # (matches C++ StatOutlierRemoval setMeanK=6, setStddevMulThresh=3.0)
+        if len(clean_pts) > 10:
+            outlier_mask = _stat_outlier_filter(clean_pts, k_neighbors=6, std_mul=3.0)
+            face_idx = clean_idx[~outlier_mask]
+            face_pts = points[face_idx]
+            stat_outliers = clean_pts[outlier_mask]
         else:
-            face_pts = cand_pts
-            face_idx = cand_idx
+            face_idx = clean_idx
+            face_pts = clean_pts
+            stat_outliers = np.zeros((0, 3), dtype=np.float64)
+
+        # ── Phase 4: Robust out-of-plane residual & 3D connectivity filter ──
+        # Reject floating scan artifacts, optical triangulation reflections,
+        # and disjointed fragments hovering above/below the true physical surface
+        if len(face_pts) > 10:
+            c_tmp = np.mean(face_pts, axis=0)
+            diff_tmp = face_pts - c_tmp
+            _, _, v_tmp = np.linalg.svd((diff_tmp.T @ diff_tmp) / len(face_pts))
+            z_res = np.dot(diff_tmp, v_tmp[2])
+
+            med_z = np.median(z_res)
+            mad_z = np.median(np.abs(z_res - med_z))
+            z_limit = max(0.40, min(decomp_config.plane_distance_thresh_mm, 4.0 * 1.4826 * mad_z))
+            valid_z = np.abs(z_res - med_z) <= z_limit
+
+            if np.any(valid_z):
+                u_res = np.dot(diff_tmp, v_tmp[0])
+                v_res = np.dot(diff_tmp, v_tmp[1])
+                sub_pts = np.column_stack((u_res[valid_z], v_res[valid_z], z_res[valid_z]))
+                min_c = sub_pts.min(axis=0)
+                voxels = np.floor((sub_pts - min_c) / 1.0).astype(int)
+                grid_shape = voxels.max(axis=0) + 1
+                if np.prod(grid_shape) < 5_000_000:
+                    vox_grid = np.zeros(tuple(grid_shape), dtype=bool)
+                    vox_grid[voxels[:, 0], voxels[:, 1], voxels[:, 2]] = True
+                    vox_labels, num_comp = ndimage.label(vox_grid, structure=ndimage.generate_binary_structure(3, 1))
+                    pt_vox = vox_labels[voxels[:, 0], voxels[:, 1], voxels[:, 2]]
+                    vox_sizes = np.bincount(pt_vox, minlength=num_comp + 1)
+                    main_comp = pt_vox == np.argmax(vox_sizes[1:]) + 1
+                    valid_z_idx = np.where(valid_z)[0]
+                    clean_mask = np.zeros(len(face_pts), dtype=bool)
+                    clean_mask[valid_z_idx[main_comp]] = True
+                else:
+                    clean_mask = valid_z
+            else:
+                clean_mask = np.ones(len(face_pts), dtype=bool)
+
+            residual_outliers = face_pts[~clean_mask]
+            face_idx = face_idx[clean_mask]
+            face_pts = face_pts[clean_mask]
+        else:
+            residual_outliers = np.zeros((0, 3), dtype=np.float64)
+
+        invalid_pts = np.concatenate((
+            cand_pts[~connected],
+            points[connected_idx[edge_mask]],
+            stat_outliers,
+            residual_outliers,
+        ), axis=0)
+        if len(face_pts) < decomp_config.min_patch_points:
+            continue
 
         # Coordinate projection onto local face plane
         c_face = np.mean(face_pts, axis=0)
         diff = face_pts - c_face
-        cov = (diff.T @ diff) / len(face_pts)
+        cov = (diff.T @ diff) / max(len(face_pts), 1)
         _, _, v = np.linalg.svd(cov)
         u_raw, v_raw, normal = v[0], v[1], v[2]
         c_global = np.mean(points, axis=0)
@@ -417,8 +685,6 @@ def decompose_3d_object(
         if area_est < decomp_config.min_patch_area_mm2:
             continue
 
-        assigned[cand_idx] = True
-
         raw_patches.append(
             {
                 "points": face_pts,
@@ -428,14 +694,22 @@ def decompose_3d_object(
                 "area_mm2": area_est,
                 "dims_mm": (round(u_range, 1), round(v_range, 1)),
                 "point_count": len(face_pts),
+                "invalid_points": invalid_pts,
             }
         )
 
     if not raw_patches:
         raise RuntimeError("Segmented faces did not meet minimum area requirements")
 
-    # Sort patches by area descending
-    raw_patches.sort(key=lambda p: p["area_mm2"], reverse=True)
+    # Sort patches deterministically by canonical 3D orientation (+Z, -Z, +X, -X, +Y, -Y)
+    def canonical_patch_sort_key(p: dict[str, Any]) -> tuple[int, int, float]:
+        n = np.asarray(p["normal"])
+        axis = int(np.argmax(np.abs(n)))  # 0 for X, 1 for Y, 2 for Z
+        axis_rank = 0 if axis == 2 else (1 if axis == 0 else 2)  # Z (top/bottom) -> X (right/left) -> Y (front/back)
+        sign = 0 if n[axis] >= 0 else 1
+        return (axis_rank, sign, -float(p["area_mm2"]))
+
+    raw_patches.sort(key=canonical_patch_sort_key)
 
     # 3. Metrology execution per surface patch
     from .analyze import analyze_points
@@ -475,6 +749,7 @@ def decompose_3d_object(
             is_astm_compliant=is_compliant,
             roughness=r,
             points=face_pts,
+            invalid_points=rp.get("invalid_points", np.zeros((0, 3), dtype=np.float64)),
         )
         patches.append(patch_res)
 

@@ -3,8 +3,8 @@
 try:
     from ._version import version as __version__
 except ImportError:
-    __version__ = "0.7.1"
-from .algorithm import PurePythonResult, analyze_pure_python, compute_heatmap_grid
+    __version__ = "0.7.2"
+from .algorithm import PurePythonResult, analyze_pure_python, compute_heatmap_grid, interpolate_heatmap_at_points
 from .analyze import (
     analyze_file,
     analyze_object,
@@ -39,6 +39,7 @@ __all__ = [
     "analyze_points",
     "analyze_pure_python",
     "compute_heatmap_grid",
+    "interpolate_heatmap_at_points",
     "compute_roughness",
     "compute_roughness_from_ply",
     "decompose_3d_object",
