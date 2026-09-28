@@ -5,6 +5,8 @@ from pathlib import Path
 
 import numpy as np
 
+from svr_roughness.result import PlaneFit, RoughnessResult
+
 from svr_roughness import RoughnessConfig, analyze_file, analyze_points, compute_heatmap_grid, format_report
 
 
@@ -51,6 +53,22 @@ class TestRoughnessAnalysis(unittest.TestCase):
             self.assertIn("svr_um", loaded)
         finally:
             tmp_path.unlink()
+
+    def test_report_without_plane_coordinates(self):
+        plane = PlaneFit(
+            centroid=np.zeros(3), normal=np.array([0., 0., 1.]),
+            x_axis=np.array([1., 0., 0.]), y_axis=np.array([0., 1., 0.]),
+            coords=None,
+        )
+        for grid in (None, np.zeros((3, 5))):
+            with self.subTest(has_grid=grid is not None):
+                result = RoughnessResult(
+                    svr_um=30., sa_um=20., sq_um=25., plane=plane,
+                    grid=grid, grid_pitch_mm=0.2, config=RoughnessConfig(),
+                )
+                self.assertAlmostEqual(result.patch_width_mm, 1. if grid is not None else 0.)
+                self.assertAlmostEqual(result.patch_height_mm, 0.6 if grid is not None else 0.)
+                self.assertIn("Surface Variogram Roughness", format_report(result))
 
     def test_too_few_points(self):
         few_points = np.array([[0.0, 0.0, 0.0], [1.0, 1.0, 1.0]])
