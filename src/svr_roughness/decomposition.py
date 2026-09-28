@@ -554,7 +554,7 @@ def decompose_3d_object(
 
     # 2. Simultaneous Closest-Plane Assignment
     if progress:
-        progress("Assigning full-resolution points to faces", 0.35)
+        progress("Building spatial index & assigning points", 0.20)
 
     dists_matrix = np.column_stack([np.abs(np.dot(points, n) + d) for n, d, c in plane_models])
     min_dist_plane = np.argmin(dists_matrix, axis=1)
@@ -564,6 +564,10 @@ def decompose_3d_object(
     raw_patches: list[dict[str, Any]] = []
 
     for model_idx, (n, d, c) in enumerate(plane_models):
+        if progress:
+            frac = 0.20 + 0.40 * (model_idx / max(1, len(plane_models)))
+            progress(f"Segmenting Face {model_idx + 1}/{len(plane_models)}", frac)
+
         cand_mask = (min_dist_plane == model_idx) & (min_dist_val < decomp_config.plane_distance_thresh_mm)
         cand_idx = np.where(cand_mask)[0]
         if len(cand_idx) < decomp_config.min_patch_points:
@@ -727,9 +731,9 @@ def decompose_3d_object(
 
     for idx, rp in enumerate(raw_patches):
         patch_id = idx + 1
-        pct = 0.50 + 0.45 * (idx / len(raw_patches))
+        pct = 0.60 + 0.35 * (idx / max(1, len(raw_patches)))
         if progress:
-            progress(f"Analyzing ASTM roughness for Face {patch_id}", pct)
+            progress(f"Analyzing ASTM roughness for Face {patch_id}/{len(raw_patches)}", pct)
 
         face_pts = rp["points"]
         try:
