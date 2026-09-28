@@ -215,14 +215,27 @@ def _curvature_edge_mask(
     if len(candidates) == 0 or config.edge_curvature_threshold <= 0:
         return np.zeros(len(candidates), dtype=bool)
 
+    cand_pts = points[candidates]
+
+    # Casting pits, pores, and rough surface textures in the interior of a face
+    # have elevated local curvature but are valid surface data, not part edges.
+    # Restricting edge seeds to the boundary zone of the face first skips
+    # expensive KD-tree queries and 3x3 eigenvalue decompositions on 90-95% of points.
+    boundary = _near_face_boundary(cand_pts, config.edge_margin_mm)
+    if not np.any(boundary):
+        return np.zeros(len(candidates), dtype=bool)
+
+    boundary_sub_indices = np.where(boundary)[0]
+    sub_cands = candidates[boundary_sub_indices]
+
     # Use full-cloud tree for neighbor lookup so edge points whose neighbors
     # span multiple faces are correctly detected as non-planar.
     k = min(config.edge_neighbor_count, len(points))
-    flagged = np.zeros(len(candidates), dtype=bool)
+    sub_flagged = np.zeros(len(sub_cands), dtype=bool)
 
-    for start in range(0, len(candidates), 4096):
-        end = min(start + 4096, len(candidates))
-        batch = candidates[start:end]
+    for start in range(0, len(sub_cands), 4096):
+        end = min(start + 4096, len(sub_cands))
+        batch = sub_cands[start:end]
         _, indices = tree.query(
             points[batch], k=k,
             distance_upper_bound=config.edge_neighbor_radius_mm,
@@ -248,25 +261,19 @@ def _curvature_edge_mask(
         sigma = eigenvalues[:, 0] / np.maximum(total_var, 1e-12)
 
         # Flag: must have enough neighbors AND exceed curvature threshold
-        flagged[start:end] = (counts >= 8) & (sigma > config.edge_curvature_threshold)
+        sub_flagged[start:end] = (counts >= 8) & (sigma > config.edge_curvature_threshold)
 
-    # Casting pits, pores, and rough surface textures in the interior of a face
-    # have elevated local curvature but are valid surface data, not part edges.
-    # Restrict edge seeds to the boundary zone of the face.
-    if np.any(flagged):
-        boundary = _near_face_boundary(
-            points[candidates], config.edge_margin_mm,
-        )
-        flagged &= boundary
+    flagged = np.zeros(len(candidates), dtype=bool)
+    flagged[boundary_sub_indices[sub_flagged]] = True
 
     # ── Expand edge margin around confirmed boundary edge seed points ──
     # This catches the transition zone between flat face and edge/corner
     # that individually might have borderline σ values.
     if np.any(flagged) and config.edge_margin_mm > 0:
-        seed_pts = points[candidates[flagged]]
+        seed_pts = cand_pts[flagged]
         seed_tree = cKDTree(seed_pts)
         distance, _ = seed_tree.query(
-            points[candidates],
+            cand_pts,
             distance_upper_bound=config.edge_margin_mm,
         )
         flagged |= (distance <= config.edge_margin_mm)
