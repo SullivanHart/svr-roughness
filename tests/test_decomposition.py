@@ -201,3 +201,23 @@ def test_spatial_component_excludes_remote_coplanar_fixture() -> None:
     keep = _largest_spatial_component(np.vstack((surface, fixture)), 2.0)
     assert keep[:len(surface)].all()
     assert not keep[len(surface):].any()
+
+
+def test_tilted_planar_surface_detected_and_density_reported() -> None:
+    from svr_roughness.decomposition import is_planar_surface
+    coords = np.arange(0.0, 60.0, 0.8)
+    x, y = np.meshgrid(coords, coords)
+    plane = np.column_stack((x.ravel(), y.ravel(), np.zeros(x.size)))
+    # Rotate 45 degrees around X and Y
+    rot = np.array([
+        [0.7071, -0.5, 0.5],
+        [0.7071, 0.5, -0.5],
+        [0.0, 0.7071, 0.7071],
+    ])
+    tilted = plane @ rot
+    # AABB thickness ratio would fail, but PCA-aligned thickness ratio passes
+    assert is_planar_surface(tilted) is True
+
+    res = decompose_3d_object(tilted, config=RoughnessConfig(grid_mm=0.5))
+    rep = res.format_report()
+    assert "Density:    WARNING" in rep

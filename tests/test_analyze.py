@@ -87,6 +87,43 @@ class TestRoughnessAnalysis(unittest.TestCase):
         self.assertTrue(35.0 < result.sq_um < 55.0)
         self.assertTrue(20.0 < result.svr_um < 35.0)
 
+    def test_sparse_scan_density_error_and_warning(self):
+        # Scan with ~1.0 mm point spacing
+        rng = np.random.default_rng(123)
+        coords = np.arange(0.0, 50.0, 1.0)
+        gx, gy = np.meshgrid(coords, coords)
+        pts = np.column_stack([gx.ravel(), gy.ravel(), rng.normal(0, 0.02, size=gx.size)])
+
+        # At default 0.20 mm pitch, spacing ~1.0 mm is > 2.0x pitch -> should raise informative ValueError
+        with self.assertRaises(ValueError) as cm:
+            analyze_points(pts, config=RoughnessConfig(grid_mm=0.20))
+        err_msg = str(cm.exception)
+        self.assertIn("Insufficient contiguous surface area at grid_mm=0.20 mm", err_msg)
+        self.assertIn("Average point spacing for this scan is ~", err_msg)
+        self.assertIn("--grid-mm 0.6", err_msg)
+
+        # Re-running with suggested pitch 0.60 mm succeeds and flags density warning
+        res = analyze_points(pts, config=RoughnessConfig(grid_mm=0.60))
+        self.assertGreater(res.svr_um, 0.0)
+        report = format_report(res)
+        self.assertIn("Point Density Status:      WARNING (> 0.20 mm required)", report)
+
+    def test_b1_ply_density_behavior(self):
+        b1_path = Path(__file__).resolve().parents[2] / "scans" / "B1.ply"
+        if not b1_path.is_file():
+            self.skipTest(f"Test scan {b1_path} not found")
+
+        # 1. 0.20 mm grid raises ValueError with suggestion 0.6
+        with self.assertRaises(ValueError) as cm:
+            analyze_file(b1_path, config=RoughnessConfig(grid_mm=0.20))
+        self.assertIn("Insufficient contiguous surface area at grid_mm=0.20 mm", str(cm.exception))
+        self.assertIn("--grid-mm 0.6", str(cm.exception))
+
+        # 2. 0.60 mm grid succeeds with warning
+        res = analyze_file(b1_path, config=RoughnessConfig(grid_mm=0.60))
+        rep = format_report(res)
+        self.assertIn("Point Density Status:      WARNING (> 0.20 mm required)", rep)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -161,28 +161,29 @@ def rasterize_elevation_grid(
     grid_z[valid] = grid_sum_zw[valid] / grid_sum_w[valid]
     grid_z[~valid] = np.nan
 
+    span_x_mm = (max_x - min_x) * 1000.0
+    span_y_mm = (max_y - min_y) * 1000.0
+    box_area_mm2 = max(span_x_mm * span_y_mm, 1e-4)
+    n_points = max(len(rotated_pts_m), 1)
+    approx_spacing_mm = math.sqrt(box_area_mm2 / n_points)
+    pitch_mm = pitch_m * 1000.0
+
+    if approx_spacing_mm > pitch_mm * 2.0:
+        # Suggest a pitch matching approximately 0.55x to 1.0x the point spacing (rounded up to nearest 0.1mm)
+        suggested_pitch = max(0.40, math.ceil(round(approx_spacing_mm * 0.55, 2) * 10.0) / 10.0)
+        if suggested_pitch <= pitch_mm:
+            suggested_pitch = round(pitch_mm * 2.0, 1)
+        raise ValueError(
+            f"Insufficient contiguous surface area at grid_mm={pitch_mm:.2f} mm. "
+            f"Average point spacing for this scan is ~{approx_spacing_mm:.2f} mm (~{n_points / box_area_mm2:.1f} pts/mm^2), "
+            f"which is significantly coarser than the requested {pitch_mm:.2f} mm grid pitch (causing most raster cells to be empty). "
+            f"Re-run with a coarser pitch matching your scan density: --grid-mm {suggested_pitch:.1f}"
+        )
+
     # Trim only purely empty boundary rows and columns (preserving full organic shape)
     valid_rows = np.where(valid.any(axis=1))[0]
     valid_cols = np.where(valid.any(axis=0))[0]
     if len(valid_rows) == 0 or len(valid_cols) == 0:
-        span_x_mm = (max_x - min_x) * 1000.0
-        span_y_mm = (max_y - min_y) * 1000.0
-        box_area_mm2 = max(span_x_mm * span_y_mm, 1e-4)
-        n_points = max(len(rotated_pts_m), 1)
-        approx_spacing_mm = math.sqrt(box_area_mm2 / n_points)
-        pitch_mm = pitch_m * 1000.0
-
-        if approx_spacing_mm > pitch_mm * 1.25:
-            # Suggest a pitch matching approximately 0.5x to 1.0x the point spacing, rounded to 0.1mm
-            suggested_pitch = max(0.40, round(approx_spacing_mm * 0.5, 1))
-            if suggested_pitch <= pitch_mm:
-                suggested_pitch = round(pitch_mm * 2.0, 1)
-            raise ValueError(
-                f"Insufficient contiguous surface area at grid_mm={pitch_mm:.2f} mm. "
-                f"Average point spacing for this scan is ~{approx_spacing_mm:.2f} mm (~{n_points / box_area_mm2:.1f} pts/mm^2), "
-                f"which is significantly coarser than the requested {pitch_mm:.2f} mm grid pitch (causing most raster cells to be empty). "
-                f"Re-run with a coarser pitch matching your scan density: --grid-mm {suggested_pitch:.1f}"
-            )
         raise ValueError(
             f"Insufficient contiguous surface area to form a valid roughness grid at grid_mm={pitch_mm:.2f} mm."
         )

@@ -220,8 +220,13 @@ def save_metrics_json(result: RoughnessResult, path: str | Path) -> None:
     metrics_path.write_text(json.dumps(result.to_dict(), indent=2) + "\n")
 
 
-def format_report(result: RoughnessResult, target_svr_mm: float | None = None) -> str:
+def format_report(result: Any, target_svr_mm: float | None = None) -> str:
     """Format a human-readable report per ASTM WK92969 §10."""
+    if hasattr(result, "format_report") and callable(result.format_report):
+        try:
+            return result.format_report(target_svr_mm=target_svr_mm)
+        except TypeError:
+            return result.format_report()
     eval_length_mm = result.config.svr_points * result.config.svr_span_mm if result.config else 5.0
     patch_w = result.patch_width_mm
     patch_h = result.patch_height_mm

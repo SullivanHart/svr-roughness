@@ -104,7 +104,7 @@ class ObjectRoughnessResult:
             "patches": [p.to_dict() for p in self.patches],
         }
 
-    def format_report(self) -> str:
+    def format_report(self, target_svr_mm: float | None = None) -> str:
         """Format a multi-face inspection summary report."""
         lines = [
             "═══════════════════════════════════════════════════════════════",
@@ -121,21 +121,40 @@ class ObjectRoughnessResult:
             f"  Area-Weighted Mean S_VR: {self.mean_svr_um:.3f} µm",
             f"  Worst-Case Face S_VR:    {self.worst_svr_um:.3f} µm  (Primary Spec Gating)",
             f"  Best-Case Face S_VR:     {self.best_svr_um:.3f} µm",
-            "",
-            "───────────────────────────────────────────────────────────────",
-            "  Individual Detected Surface Faces",
-            "───────────────────────────────────────────────────────────────",
         ]
+        if target_svr_mm is not None and target_svr_mm > 0:
+            passed = (self.worst_svr_um * 0.001) <= target_svr_mm
+            status_str = "PASS (Within specification)" if passed else "FAIL (Exceeds specification)"
+            lines.extend(
+                [
+                    f"  Purchaser Spec Target:   <= {target_svr_mm:.4f} mm",
+                    f"  Worst Face Spec Status:  {status_str}",
+                ]
+            )
+        lines.extend(
+            [
+                "",
+                "───────────────────────────────────────────────────────────────",
+                "  Individual Detected Surface Faces",
+                "───────────────────────────────────────────────────────────────",
+            ]
+        )
         for p in self.patches:
             r = p.roughness
             comp = r.comparator_equivalents()
             scrata = comp.get("SCRATA (A802)", comp.get("SCRATA (ASTM A802)", "N/A"))
             status = "PASS (>=50x50mm)" if p.is_astm_compliant else "WARN (<50x50mm)"
+            area = p.area_mm2
+            pts_count = p.point_count
+            density = (pts_count / area) if area > 0 else 0.0
+            spacing = float(1.0 / np.sqrt(density)) if density > 0 else 0.0
+            density_status = f"PASS ({spacing:.3f} mm spacing)" if spacing <= 0.20 else f"WARNING ({spacing:.3f} mm > 0.20 mm required)"
             lines.extend(
                 [
                     f"  [{p.name}]",
                     f"    Points:     {p.point_count:,} ({p.dims_mm[0]:.1f} × {p.dims_mm[1]:.1f} mm, Area: {p.area_mm2:.0f} mm²)",
                     f"    Face Size:  {status}",
+                    f"    Density:    {density_status}",
                     f"    S_VR:       {r.svr_um:.3f} µm  |  Sa: {r.sa_um:.3f} µm  |  Sq: {r.sq_um:.3f} µm",
                     f"    SCRATA:     {scrata}",
                     "",
@@ -159,15 +178,15 @@ def is_planar_surface(
 
     c = np.mean(pts, axis=0)
     centered = pts - c
-    _, s, _ = np.linalg.svd(centered, full_matrices=False)
+    _, s, vh = np.linalg.svd(centered, full_matrices=False)
     # Eigenvalues proportional to s^2
     eig = s**2
     if eig[0] <= 1e-12:
         return True
 
     flatness = eig[2] / (eig[0] + eig[1] + eig[2])
-    bbox = np.ptp(pts, axis=0)
-    sorted_dims = np.sort(bbox)
+    pca_dims = np.ptp(centered @ vh.T, axis=0)
+    sorted_dims = np.sort(pca_dims)
     thickness_ratio = sorted_dims[0] / max(sorted_dims[2], 1e-6)
 
     return bool(flatness < flatness_ratio_thresh and thickness_ratio < 0.25)
