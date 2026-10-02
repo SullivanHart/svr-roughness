@@ -187,13 +187,13 @@ class RoughnessResult:
         save_grid_npz(self, path)
 
     def __repr__(self) -> str:
-        nf_str = f", noise floor: {self.noise_floor_um:.2f} µm" if self.noise_floor_um > 0 else ""
+        nf_str = f", noise floor: {self.noise_floor_um:.1f} µm" if self.noise_floor_um > 0 else ""
         grid_info = f"{self.grid.shape[1]} × {self.grid.shape[0]} cells (pitch: {self.grid_pitch_mm:.3f} mm)" if self.grid is not None else "None"
         return (
             f"RoughnessResult(\n"
-            f"  Svr = {self.svr_um:.2f} µm (raw: {self.svr_raw_um:.2f} µm{nf_str})\n"
-            f"  Sa  = {self.sa_um:.2f} µm\n"
-            f"  Sq  = {self.sq_um:.2f} µm\n"
+            f"  Svr = {self.svr_um:.1f} µm (raw: {self.svr_raw_um:.1f} µm{nf_str})\n"
+            f"  Sa  = {self.sa_um:.1f} µm\n"
+            f"  Sq  = {self.sq_um:.1f} µm\n"
             f"  Points: {self.points:,} (processed: {self.processed_points:,})\n"
             f"  Grid:   {grid_info}\n"
             f")"
@@ -242,12 +242,12 @@ def format_report(result: Any, target_svr_mm: float | None = None) -> str:
         "═══════════════════════════════════════════════════════",
         "",
         "Test Result",
-        f"  S_VR = {result.svr_mm:.4f} mm  ({result.svr_um:.3f} µm / {result.svr_in:.5f} in)",
-        f"  Sa   = {result.sa_um:.3f} µm",
-        f"  Sq   = {result.sq_um:.3f} µm",
+        f"  S_VR = {result.svr_mm:.4f} mm  ({result.svr_um:.1f} µm / {result.svr_in:.5f} in)",
+        f"  Sa   = {result.sa_um:.1f} µm",
+        f"  Sq   = {result.sq_um:.1f} µm",
     ]
     if result.noise_floor_um > 0:
-        lines.append(f"  (Dynamic Noise Floor: {result.noise_floor_um:.2f} µm, Raw S_VR: {result.svr_raw_um:.2f} µm)")
+        lines.append(f"  (Dynamic Noise Floor: {result.noise_floor_um:.1f} µm, Raw S_VR: {result.svr_raw_um:.1f} µm)")
 
     if target_svr_mm is not None and target_svr_mm > 0:
         passed = result.svr_mm <= target_svr_mm

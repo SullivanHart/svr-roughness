@@ -118,9 +118,9 @@ class ObjectRoughnessResult:
             "───────────────────────────────────────────────────────────────",
             "  Global 3D Object Roughness Summary",
             "───────────────────────────────────────────────────────────────",
-            f"  Area-Weighted Mean S_VR: {self.mean_svr_um:.3f} µm",
-            f"  Worst-Case Face S_VR:    {self.worst_svr_um:.3f} µm  (Primary Spec Gating)",
-            f"  Best-Case Face S_VR:     {self.best_svr_um:.3f} µm",
+            f"  Area-Weighted Mean S_VR: {self.mean_svr_um:.1f} µm",
+            f"  Worst-Case Face S_VR:    {self.worst_svr_um:.1f} µm  (Primary Spec Gating)",
+            f"  Best-Case Face S_VR:     {self.best_svr_um:.1f} µm",
         ]
         if target_svr_mm is not None and target_svr_mm > 0:
             passed = (self.worst_svr_um * 0.001) <= target_svr_mm
@@ -155,7 +155,7 @@ class ObjectRoughnessResult:
                     f"    Points:     {p.point_count:,} ({p.dims_mm[0]:.1f} × {p.dims_mm[1]:.1f} mm, Area: {p.area_mm2:.0f} mm²)",
                     f"    Face Size:  {status}",
                     f"    Density:    {density_status}",
-                    f"    S_VR:       {r.svr_um:.3f} µm  |  Sa: {r.sa_um:.3f} µm  |  Sq: {r.sq_um:.3f} µm",
+                    f"    S_VR:       {r.svr_um:.1f} µm  |  Sa: {r.sa_um:.1f} µm  |  Sq: {r.sq_um:.1f} µm",
                     f"    SCRATA:     {scrata}",
                     "",
                 ]
