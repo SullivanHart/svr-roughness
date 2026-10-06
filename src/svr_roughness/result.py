@@ -38,18 +38,18 @@ class RoughnessResult:
     # ── Point Cloud Geometry & Counts ──
     points: int = 0
     processed_points: int = 0
-    plane: PlaneFit = None
+    plane: PlaneFit | None = None
 
     # ── 2D Filtered Roughness Grid & Physical Elevation Grid ──
-    grid: FloatArray = None
-    elevation_grid: FloatArray = None
+    grid: FloatArray | None = None
+    elevation_grid: FloatArray | None = None
     grid_pitch_mm: float = 0.20
-    grid_origin_mm: FloatArray = None
+    grid_origin_mm: FloatArray | None = None
 
     # ── Variogram Curve ──
-    variogram_bins_um: FloatArray = None
-    variogram_counts: IntArray = None
-    config: RoughnessConfig = None
+    variogram_bins_um: FloatArray | None = None
+    variogram_counts: IntArray | None = None
+    config: RoughnessConfig | None = None
 
     @property
     def svr_mm(self) -> float:

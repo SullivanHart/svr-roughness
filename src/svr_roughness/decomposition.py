@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -12,6 +13,8 @@ from scipy.spatial import cKDTree
 
 from .algorithm import analyze_pure_python
 from .config import RoughnessConfig
+
+logger = logging.getLogger(__name__)
 from .io import load_points
 from .result import RoughnessResult, format_report
 
@@ -757,7 +760,12 @@ def decompose_3d_object(
         face_pts = rp["points"]
         try:
             r = analyze_points(face_pts, config=config)
-        except (ValueError, RuntimeError):
+        except (ValueError, RuntimeError) as exc:
+            logger.warning(
+                "ASTM roughness analysis failed for segmented patch %d: %s; points returned to unassigned pool",
+                patch_id,
+                exc,
+            )
             continue
 
         final_assigned_mask[rp["indices"]] = True

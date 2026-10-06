@@ -6,7 +6,6 @@ from pathlib import Path
 import numpy as np
 
 from svr_roughness.io import (
-    load_ascii_ply,
     load_delimited,
     load_obj,
     load_ply,
@@ -37,7 +36,7 @@ class TestIO(unittest.TestCase):
             tmp_path = Path(tmp.name)
 
         try:
-            pts = load_ascii_ply(tmp_path)
+            pts = load_ply(tmp_path)
             self.assertEqual(pts.shape, (3, 3))
             np.testing.assert_allclose(pts[0], [1.0, 2.0, 3.0])
             np.testing.assert_allclose(pts[2], [7.0, 8.0, 9.0])

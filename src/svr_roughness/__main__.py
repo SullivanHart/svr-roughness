@@ -31,7 +31,10 @@ def main() -> None:
     parser.add_argument("--short-cutoff-mm", type=float, default=1.0, help="Short cutoff lambda_s in mm (default: 1.0)")
     parser.add_argument("--long-cutoff-mm", type=float, default=25.0, help="Long cutoff lambda_c in mm (default: 25.0)")
     parser.add_argument(
-        "--gaussian-mesh", action="store_true", default=True, help="Enforce ISO 16610-61 Gaussian filtration"
+        "--gaussian-mesh",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Enforce ISO 16610-61 Gaussian filtration (pass --no-gaussian-mesh to disable)",
     )
     parser.add_argument(
         "--edge-margin-mm",

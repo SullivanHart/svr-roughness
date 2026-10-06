@@ -1,9 +1,6 @@
 """Surface roughness analysis for scanner point clouds."""
 
-try:
-    from ._version import version as __version__
-except ImportError:
-    __version__ = "0.7.2"
+from ._version import version as __version__
 from .algorithm import PurePythonResult, analyze_pure_python, compute_heatmap_grid, interpolate_heatmap_at_points
 from .analyze import (
     analyze_file,
@@ -21,7 +18,7 @@ from .decomposition import (
     decompose_3d_object,
     is_planar_surface,
 )
-from .io import load_ascii_ply, load_delimited, load_obj, load_pcd, load_ply, load_points, load_stl_vertices
+from .io import load_delimited, load_obj, load_pcd, load_ply, load_points, load_stl_vertices
 from .result import PlaneFit, RoughnessResult, format_report, save_grid_npz, save_metrics_json
 
 __all__ = [
@@ -45,7 +42,6 @@ __all__ = [
     "decompose_3d_object",
     "format_report",
     "is_planar_surface",
-    "load_ascii_ply",
     "load_delimited",
     "load_obj",
     "load_pcd",

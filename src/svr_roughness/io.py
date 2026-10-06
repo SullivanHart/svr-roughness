@@ -39,6 +39,7 @@ def load_points(path: str | Path) -> FloatArray:
 
 
 def load_ply(path: str | Path) -> FloatArray:
+    """Load 3D point coordinates from an ASCII or binary PLY file."""
     with Path(path).open("rb") as handle:
         first = handle.readline().strip()
         if first != b"ply":
@@ -91,9 +92,6 @@ def load_ply(path: str | Path) -> FloatArray:
     if rows.ndim == 1:
         rows = rows.reshape(1, 3)
     return _clean_loaded_points(rows)
-
-
-load_ascii_ply = load_ply
 
 
 def load_delimited(path: str | Path) -> FloatArray:

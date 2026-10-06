@@ -11,7 +11,8 @@ class TestConfig(unittest.TestCase):
         self.assertEqual(config.svr_span_mm, 0.5)
         self.assertEqual(config.long_cutoff_mm, 25.0)
         self.assertEqual(config.short_cutoff_mm, 1.0)
-        self.assertFalse(config.statistical_filter)
+        self.assertEqual(config.percentile_crop, 0.0)
+        self.assertTrue(config.subtract_noise)
         self.assertTrue(config.gaussian_mesh)
 
     def test_surfinspect_defaults(self):

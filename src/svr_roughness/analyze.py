@@ -14,7 +14,7 @@ if TYPE_CHECKING:
 from ._display_grid import crop_points, fit_plane_basis
 from .algorithm import analyze_pure_python
 from .config import RoughnessConfig, coerce_range
-from .io import load_ascii_ply, load_points
+from .io import load_ply, load_points
 from .result import RoughnessResult
 
 
@@ -180,7 +180,7 @@ def analyze_ply(
     progress: Callable[[str, float], None] | None = None,
     **overrides: Any,
 ) -> RoughnessResult:
-    return analyze_points(load_ascii_ply(path), config, progress=progress, **overrides)
+    return analyze_points(load_ply(path), config, progress=progress, **overrides)
 
 
 # Backward-compatible names from the first extraction.
