@@ -27,6 +27,7 @@ class RoughnessConfig:
     svr_span_mm: float = 0.5
     gaussian_mesh: bool = True
     subtract_noise: bool = True
+    disc_averaging: bool = False
 
     @classmethod
     def surfinspect_defaults(cls) -> RoughnessConfig:
@@ -79,6 +80,7 @@ def config_from_values(
     svr_span_mm: float = 0.5,
     gaussian_mesh: bool = True,
     subtract_noise: bool = True,
+    disc_averaging: bool = False,
 ) -> RoughnessConfig:
     return RoughnessConfig(
         grid_mm=grid_mm,
@@ -92,4 +94,5 @@ def config_from_values(
         svr_span_mm=svr_span_mm,
         gaussian_mesh=gaussian_mesh,
         subtract_noise=subtract_noise,
+        disc_averaging=disc_averaging,
     )

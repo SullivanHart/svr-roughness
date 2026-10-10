@@ -1,3 +1,4 @@
+import os
 import unittest
 from pathlib import Path
 
@@ -154,6 +155,39 @@ class TestAlgorithm(unittest.TestCase):
         self.assertAlmostEqual(res.sa_um, 33.74, delta=0.5)
         self.assertAlmostEqual(res.sq_um, 43.43, delta=0.5)
         self.assertEqual(len(res.variogram_bins_um), 10)
+
+    def test_compute_heatmap_grid_disc_averaging_toggle(self):
+        # Create a 2D surface grid with an isolated sharp peak in the center
+        grid = np.zeros((40, 40), dtype=np.float64)
+        grid[20, 20] = 0.05  # 50 µm peak
+
+        # 1. Point-centered mode (default / disc_averaging=False) preserves the sharp peak
+        hmap_point = compute_heatmap_grid(grid, pitch_mm=0.2, radius_mm=2.0, disc_averaging=False)
+        self.assertTrue(np.all(np.isnan(hmap_point) | (hmap_point >= 0.0)))
+        peak_point = hmap_point[20, 20]
+
+        # 2. Disc-averaging mode (disc_averaging=True) dilutes the peak across the whole disc
+        hmap_disc = compute_heatmap_grid(grid, pitch_mm=0.2, radius_mm=2.0, disc_averaging=True)
+        peak_disc = hmap_disc[20, 20]
+
+        # Point-centered response at the peak itself should be significantly sharper/higher
+        self.assertGreater(peak_point, peak_disc * 2.0)
+
+        # 3. Test environment variable toggle gate
+        old_env = os.environ.get("SVR_DISC_AVERAGING")
+        try:
+            os.environ["SVR_DISC_AVERAGING"] = "1"
+            hmap_env_disc = compute_heatmap_grid(grid, pitch_mm=0.2, radius_mm=2.0)
+            np.testing.assert_allclose(hmap_env_disc, hmap_disc)
+
+            os.environ["SVR_DISC_AVERAGING"] = "0"
+            hmap_env_point = compute_heatmap_grid(grid, pitch_mm=0.2, radius_mm=2.0)
+            np.testing.assert_allclose(hmap_env_point, hmap_point)
+        finally:
+            if old_env is None:
+                os.environ.pop("SVR_DISC_AVERAGING", None)
+            else:
+                os.environ["SVR_DISC_AVERAGING"] = old_env
 
 
 if __name__ == "__main__":

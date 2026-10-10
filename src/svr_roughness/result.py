@@ -94,13 +94,15 @@ class RoughnessResult:
         density = self.point_density_pts_mm2
         return float(1.0 / np.sqrt(density)) if density > 0 else 0.0
 
-    def heatmap(self, radius_mm: float = 5.0) -> FloatArray:
+    def heatmap(self, radius_mm: float = 5.0, disc_averaging: bool | None = None) -> FloatArray:
         """Compute the 2D local Svr spatial roughness heatmap (in µm) on demand."""
         from .algorithm import compute_heatmap_grid
 
         if self.grid is None:
             raise ValueError("No grid available to compute heatmap")
-        return compute_heatmap_grid(self.grid, self.grid_pitch_mm, radius_mm)
+        if disc_averaging is None and self.config is not None:
+            disc_averaging = getattr(self.config, "disc_averaging", None)
+        return compute_heatmap_grid(self.grid, self.grid_pitch_mm, radius_mm, disc_averaging=disc_averaging)
 
     def comparator_equivalents(self) -> dict[str, str]:
         """Convert S_VR to approximate equivalent comparator visual grades per Appendices X1-X3."""

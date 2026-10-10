@@ -13,6 +13,7 @@ Implements the exact 5-stage pipeline from SurfInspect:
 from __future__ import annotations
 
 import math
+import os
 from typing import NamedTuple
 
 import numpy as np
@@ -391,6 +392,7 @@ def compute_heatmap_grid(
     pitch_mm: float,
     radius_mm: float = 5.0,
     min_support_cells: int = 12,
+    disc_averaging: bool | None = None,
 ) -> np.ndarray:
     """Compute local Svr spatial roughness heatmap (in µm) via 2D FFT convolution.
 
@@ -400,6 +402,12 @@ def compute_heatmap_grid(
         radius_mm: Local circular evaluation radius in mm (default: 5.0 mm).
         min_support_cells: Minimum number of valid neighboring cells within radius_mm
             required to evaluate local variance (default: 12).
+        disc_averaging: If True, compute disc-averaged RMS pair variation across the
+            circular neighborhood: sqrt(2 * Var(z)). If False (default), compute
+            point-centered semivariance matching ASTM WK92969 §9.2:
+            sqrt(0.5 * [(z_i - mean_local)^2 + Var(z)]), preserving sharp point-level
+            features (peaks and pits). If None, checks the 'SVR_DISC_AVERAGING'
+            environment variable (defaulting to False).
 
     Returns:
         2D float64 array of local Svr values in micrometers (µm).
@@ -408,6 +416,9 @@ def compute_heatmap_grid(
         raise ValueError("Expected a 2D roughness elevation grid")
     if pitch_mm <= 0 or radius_mm <= 0:
         raise ValueError("pitch_mm and radius_mm must be positive")
+
+    if disc_averaging is None:
+        disc_averaging = os.environ.get("SVR_DISC_AVERAGING", "").strip().lower() in ("1", "true", "yes", "on")
 
     max_cells = int(math.ceil(radius_mm / pitch_mm))
     z_um = roughness_grid_mm * 1000.0
@@ -424,16 +435,27 @@ def compute_heatmap_grid(
     conv_z = _fft_convolve2d_same(z_clean, kernel)
     conv_z2 = _fft_convolve2d_same(z_clean**2, kernel)
 
-    # Detrended local variance: Var(z) = E[z^2] - (E[z])^2
-    # In ASTM WK92969 §9.2, v(d) = sqrt(1/(2N) sum (zi - zj)^2)
-    # The expected RMS pair difference across the circular neighborhood is sqrt(2 * Var(z)).
+    # Detrended local neighborhood statistics:
     mean_local = conv_z / np.maximum(w_local, 1e-12)
     var_local = np.maximum(0.0, (conv_z2 / np.maximum(w_local, 1e-12)) - mean_local**2)
 
     min_support = max(4.0, float(min_support_cells))
     valid_cells = (w_local >= min_support) & finite_mask
     heatmap_um = np.full_like(z_um, np.nan)
-    heatmap_um[valid_cells] = np.sqrt(2.0 * var_local[valid_cells])
+
+    if disc_averaging:
+        # Disc-averaged RMS pair variation:
+        # In ASTM WK92969 §9.2, v(d) = sqrt(1/(2N) sum (zi - zj)^2).
+        # The expected RMS pair difference across the circular neighborhood is sqrt(2 * Var(z)).
+        heatmap_um[valid_cells] = np.sqrt(2.0 * var_local[valid_cells])
+    else:
+        # Point-centered semivariance matching ASTM WK92969 §9.2:
+        # gamma(i) = 1/(2N) * sum_j (z_i - z_j)^2 = 0.5 * [ (z_i - mean_local)^2 + var_local ]
+        # Preserves needle-sharp local point contrast (individual grain peaks and pores)
+        # while evaluating height differences across the full evaluation radius_mm.
+        msd_point = (z_clean - mean_local) ** 2 + var_local
+        local_gamma = 0.5 * msd_point
+        heatmap_um[valid_cells] = np.sqrt(np.maximum(0.0, local_gamma[valid_cells]))
 
     return heatmap_um
 

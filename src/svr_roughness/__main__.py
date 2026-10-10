@@ -48,6 +48,12 @@ def main() -> None:
         default=12,
         help="Maximum number of planar faces to extract in 3D mode (default: 12)",
     )
+    parser.add_argument(
+        "--disc-averaging",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Use disc-averaged neighborhood variance for heatmap instead of point-centered semivariance",
+    )
     parser.add_argument("--metrics-out", type=Path, help="Path to save metrics as JSON")
     parser.add_argument("--grid-out", type=Path, help="Path to save 2D roughness grid as NPZ")
     parser.add_argument("--heatmap-out", type=Path, help="Path to save 2D Svr heatmap as NPY or NPZ")
@@ -58,6 +64,7 @@ def main() -> None:
         short_cutoff_mm=args.short_cutoff_mm,
         long_cutoff_mm=args.long_cutoff_mm,
         gaussian_mesh=args.gaussian_mesh,
+        disc_averaging=bool(args.disc_averaging),
     )
 
     if args.decompose_3d:
@@ -84,7 +91,7 @@ def main() -> None:
     if args.grid_out:
         result.save_grid_npz(args.grid_out)
     if args.heatmap_out:
-        hmap = result.heatmap()
+        hmap = result.heatmap(disc_averaging=bool(args.disc_averaging))
         if args.heatmap_out.suffix == ".npz":
             import numpy as np
 
