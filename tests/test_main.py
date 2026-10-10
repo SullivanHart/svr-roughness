@@ -13,6 +13,8 @@ def test_cli_help():
         [sys.executable, "-m", "svr_roughness", "--help"],
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         check=True,
     )
     assert "Calculate surface roughness from a point-cloud file" in res.stdout
@@ -47,6 +49,8 @@ def test_cli_single_surface_run(tmp_path: Path):
         ],
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         check=True,
     )
     assert "Surface Variogram Roughness" in res.stdout
@@ -83,6 +87,8 @@ def test_cli_3d_mode(tmp_path: Path):
         ],
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         check=True,
     )
     assert "Multi-Surface 3D Object Roughness Report" in res.stdout

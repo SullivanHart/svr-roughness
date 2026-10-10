@@ -223,7 +223,7 @@ def save_grid_npz(result: RoughnessResult, path: str | Path) -> None:
 def save_metrics_json(result: RoughnessResult, path: str | Path) -> None:
     metrics_path = Path(path)
     metrics_path.parent.mkdir(parents=True, exist_ok=True)
-    metrics_path.write_text(json.dumps(result.to_dict(), indent=2) + "\n")
+    metrics_path.write_text(json.dumps(result.to_dict(), indent=2) + "\n", encoding="utf-8")
 
 
 def format_report(result: Any, target_svr_mm: float | None = None) -> str:
