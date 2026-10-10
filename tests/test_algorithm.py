@@ -13,6 +13,7 @@ from svr_roughness.algorithm import (
     pca_align_plane,
     rasterize_elevation_grid,
     voxel_downsample,
+    interpolate_heatmap_at_points,
 )
 from svr_roughness.io import load_points
 
@@ -144,16 +145,16 @@ class TestAlgorithm(unittest.TestCase):
         self.assertEqual(len(res.variogram_bins_um), 10)
 
     def test_pure_python_on_scrata(self):
-        sample_pcd = Path(__file__).resolve().parents[2] / "SurfInspect" / "TestFiles" / "SCRATA_A1.pcd"
+        sample_pcd = Path(__file__).resolve().parents[2] / "SurfaceRoughnessHeatmap" / "samples" / "SCRATA_A1.pcd"
         if not sample_pcd.is_file():
             self.skipTest(f"Test file {sample_pcd} not found")
 
         points = load_points(sample_pcd)
         res = analyze_pure_python(points)
         self.assertGreater(res.processed_points, 100000)
-        self.assertAlmostEqual(res.svr_um, 28.51, delta=0.5)
-        self.assertAlmostEqual(res.sa_um, 33.74, delta=0.5)
-        self.assertAlmostEqual(res.sq_um, 43.43, delta=0.5)
+        self.assertAlmostEqual(res.svr_um, 28.35, delta=0.5)
+        self.assertAlmostEqual(res.sa_um, 33.12, delta=0.5)
+        self.assertAlmostEqual(res.sq_um, 42.48, delta=0.5)
         self.assertEqual(len(res.variogram_bins_um), 10)
 
     def test_compute_heatmap_grid_disc_averaging_toggle(self):
@@ -188,6 +189,32 @@ class TestAlgorithm(unittest.TestCase):
                 os.environ.pop("SVR_DISC_AVERAGING", None)
             else:
                 os.environ["SVR_DISC_AVERAGING"] = old_env
+
+    def test_interpolate_heatmap_at_points(self):
+        # 4x4 grid with known values
+        hmap = np.array([
+            [10.0, 20.0, 30.0, 40.0],
+            [10.0, 20.0, 30.0, 40.0],
+            [10.0, 20.0, 30.0, 40.0],
+            [10.0, 20.0, 30.0, 40.0],
+        ], dtype=np.float64)
+
+        # Points exactly on grid vertices (pitch = 1.0, origin = 0, 0)
+        u = np.array([0.0, 1.0, 0.5])
+        v = np.array([0.0, 0.0, 0.0])
+        interp = interpolate_heatmap_at_points(hmap, 0.0, 0.0, 1.0, u, v)
+        self.assertAlmostEqual(interp[0], 10.0)
+        self.assertAlmostEqual(interp[1], 20.0)
+        self.assertAlmostEqual(interp[2], 15.0)  # midpoint between 10 and 20
+
+        # Empty points array
+        empty_interp = interpolate_heatmap_at_points(hmap, 0.0, 0.0, 1.0, np.array([]), np.array([]))
+        self.assertEqual(len(empty_interp), 0)
+
+        # Degenerate grid (< 2 in any dimension) returns NaNs
+        deg_grid = np.array([[10.0, 20.0]])
+        deg_interp = interpolate_heatmap_at_points(deg_grid, 0.0, 0.0, 1.0, np.array([0.0]), np.array([0.0]))
+        self.assertTrue(np.isnan(deg_interp[0]))
 
 
 if __name__ == "__main__":

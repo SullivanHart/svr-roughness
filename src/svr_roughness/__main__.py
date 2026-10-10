@@ -52,7 +52,7 @@ def main() -> None:
         "--disc-averaging",
         action=argparse.BooleanOptionalAction,
         default=False,
-        help="Use disc-averaged neighborhood variance for heatmap instead of point-centered semivariance",
+        help="[Legacy] Use disc-averaged neighborhood variance for heatmap instead of standard point-centered semivariance",
     )
     parser.add_argument("--metrics-out", type=Path, help="Path to save metrics as JSON")
     parser.add_argument("--grid-out", type=Path, help="Path to save 2D roughness grid as NPZ")

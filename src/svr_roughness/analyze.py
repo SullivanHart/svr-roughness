@@ -52,12 +52,15 @@ def analyze_points(
         selected = selected[(selected[:, 1] >= resolved.y_range[0]) & (selected[:, 1] <= resolved.y_range[1])]
     if resolved.z_range:
         selected = selected[(selected[:, 2] >= resolved.z_range[0]) & (selected[:, 2] <= resolved.z_range[1])]
+    if len(selected) < 20:
+        raise ValueError("SurfInspect engine requires at least 20 valid points")
+
     if resolved.percentile_crop > 0:
         selection_plane = fit_plane_basis(selected)
         _, crop_mask = crop_points(selection_plane.coords, resolved)
         selected = selected[crop_mask]
-    if len(selected) < 20:
-        raise ValueError("SurfInspect engine requires at least 20 valid points")
+        if len(selected) < 20:
+            raise ValueError("SurfInspect engine requires at least 20 valid points")
 
     if progress:
         progress("Executing ASTM WK92969 analysis", 0.40)
@@ -71,6 +74,7 @@ def analyze_points(
         variogram_points=resolved.svr_points,
         variogram_span_mm=resolved.svr_span_mm,
         subtract_noise=resolved.subtract_noise,
+        gaussian_mesh=resolved.gaussian_mesh,
     )
 
     # ── Plane fit synchronized with grid rasterization coordinate frame ──

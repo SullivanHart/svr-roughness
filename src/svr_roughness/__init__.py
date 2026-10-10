@@ -1,7 +1,13 @@
 """Surface roughness analysis for scanner point clouds."""
 
 from ._version import version as __version__
-from .algorithm import PurePythonResult, analyze_pure_python, compute_heatmap_grid, interpolate_heatmap_at_points
+from .algorithm import (
+    PurePythonResult,
+    SparseScanError,
+    analyze_pure_python,
+    compute_heatmap_grid,
+    interpolate_heatmap_at_points,
+)
 from .analyze import (
     analyze_file,
     analyze_object,
@@ -28,6 +34,7 @@ __all__ = [
     "PurePythonResult",
     "RoughnessConfig",
     "RoughnessResult",
+    "SparseScanError",
     "SurfacePatchResult",
     "__version__",
     "analyze_file",

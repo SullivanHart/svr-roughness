@@ -27,7 +27,7 @@ class RoughnessConfig:
     svr_span_mm: float = 0.5
     gaussian_mesh: bool = True
     subtract_noise: bool = True
-    disc_averaging: bool = False
+    disc_averaging: bool = False  # Legacy parameter (ASTM WK92969 §9.2 standard uses point-centered semivariance)
 
     @classmethod
     def surfinspect_defaults(cls) -> RoughnessConfig:

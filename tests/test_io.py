@@ -138,8 +138,8 @@ class TestIO(unittest.TestCase):
         obj_content = (
             "# Wavefront OBJ\n"
             "v 1.0 2.0 3.0\n"
-            "v 4.0 5.0 6.0\n"
-            "v 7.0 8.0 9.0\n"
+            "v\t4.0\t5.0\t6.0\n"
+            "  v  7.0 8.0 9.0\n"
             "f 1 2 3\n"
         )
         with tempfile.NamedTemporaryFile(mode="w", suffix=".obj", delete=False) as tmp:
@@ -150,6 +150,7 @@ class TestIO(unittest.TestCase):
             pts = load_obj(tmp_path)
             self.assertEqual(pts.shape, (3, 3))
             np.testing.assert_allclose(pts[1], [4.0, 5.0, 6.0])
+            np.testing.assert_allclose(pts[2], [7.0, 8.0, 9.0])
         finally:
             tmp_path.unlink()
 

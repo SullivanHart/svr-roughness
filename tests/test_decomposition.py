@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 
 from scipy.spatial import cKDTree
-from svr_roughness.decomposition import _curvature_edge_mask, _largest_spatial_component
+from svr_roughness.decomposition import _curvature_edge_mask, _largest_spatial_component, _stat_outlier_filter
 
 from svr_roughness import (
     DecompositionConfig,
@@ -221,3 +221,23 @@ def test_tilted_planar_surface_detected_and_density_reported() -> None:
     res = decompose_3d_object(tilted, config=RoughnessConfig(grid_mm=0.5))
     rep = res.format_report()
     assert "Density:    WARNING" in rep
+
+
+def test_stat_outlier_filter():
+    # Dense regular cluster of 100 points around origin
+    rng = np.random.default_rng(42)
+    cluster = rng.normal(0.0, 0.5, size=(100, 3))
+    # Two far isolated outliers
+    outliers = np.array([[50.0, 50.0, 50.0], [-50.0, -50.0, -50.0]])
+    pts = np.vstack([cluster, outliers])
+
+    mask = _stat_outlier_filter(pts, k_neighbors=6, std_mul=3.0)
+    assert mask[-1] is np.True_ or mask[-1] == True
+    assert mask[-2] is np.True_ or mask[-2] == True
+    assert not mask[:100].all()
+
+    # Fewer points than k_neighbors + 1 returns all False
+    few_pts = np.array([[0.0, 0.0, 0.0], [1.0, 1.0, 1.0]])
+    few_mask = _stat_outlier_filter(few_pts, k_neighbors=6)
+    assert not few_mask.any()
+

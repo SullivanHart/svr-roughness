@@ -76,7 +76,7 @@ class TestRoughnessAnalysis(unittest.TestCase):
             analyze_points(few_points)
 
     def test_scrata_sample(self):
-        sample_pcd = Path(__file__).resolve().parents[2] / "SurfInspect" / "TestFiles" / "SCRATA_A1.pcd"
+        sample_pcd = Path(__file__).resolve().parents[2] / "SurfaceRoughnessHeatmap" / "samples" / "SCRATA_A1.pcd"
         if not sample_pcd.is_file():
             self.skipTest(f"Test file {sample_pcd} not found")
 

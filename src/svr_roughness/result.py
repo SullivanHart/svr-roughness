@@ -95,7 +95,11 @@ class RoughnessResult:
         return float(1.0 / np.sqrt(density)) if density > 0 else 0.0
 
     def heatmap(self, radius_mm: float = 5.0, disc_averaging: bool | None = None) -> FloatArray:
-        """Compute the 2D local Svr spatial roughness heatmap (in µm) on demand."""
+        """Compute the 2D local Svr spatial roughness heatmap (in µm) on demand.
+
+        Note: disc_averaging is a legacy parameter; default point-centered semivariance
+        is the ASTM WK92969 standard method.
+        """
         from .algorithm import compute_heatmap_grid
 
         if self.grid is None:
@@ -164,11 +168,11 @@ class RoughnessResult:
         """Return a clean JSON-serializable dictionary of metrics and metadata."""
         grid_shape = [int(self.grid.shape[0]), int(self.grid.shape[1])] if self.grid is not None else [0, 0]
         return {
-            "svr_um": round(self.svr_um, 3),
-            "sa_um": round(self.sa_um, 3),
-            "sq_um": round(self.sq_um, 3),
-            "svr_raw_um": round(self.svr_raw_um, 3),
-            "noise_floor_um": round(self.noise_floor_um, 3),
+            "svr_um": round(self.svr_um, 3) if np.isfinite(self.svr_um) else None,
+            "sa_um": round(self.sa_um, 3) if np.isfinite(self.sa_um) else None,
+            "sq_um": round(self.sq_um, 3) if np.isfinite(self.sq_um) else None,
+            "svr_raw_um": round(self.svr_raw_um, 3) if np.isfinite(self.svr_raw_um) else None,
+            "noise_floor_um": round(self.noise_floor_um, 3) if np.isfinite(self.noise_floor_um) else None,
             "points": int(self.points),
             "processed_points": int(self.processed_points),
             "grid_shape": grid_shape,
@@ -236,7 +240,7 @@ def format_report(result: Any, target_svr_mm: float | None = None) -> str:
     spacing = result.average_point_spacing_mm
 
     patch_valid = patch_w >= 50.0 and patch_h >= 50.0
-    density_valid = spacing <= 0.20
+    density_valid = 0 < spacing <= 0.20
 
     lines = [
         "═══════════════════════════════════════════════════════",

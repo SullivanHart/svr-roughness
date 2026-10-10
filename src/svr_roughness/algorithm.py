@@ -17,7 +17,15 @@ import os
 from typing import NamedTuple
 
 import numpy as np
-from numpy.lib.stride_tricks import sliding_window_view
+from scipy import ndimage
+
+
+class SparseScanError(ValueError):
+    """Raised when point spacing is too coarse for the requested grid pitch."""
+
+    def __init__(self, message: str, suggested_pitch: float | None = None) -> None:
+        super().__init__(message)
+        self.suggested_pitch = suggested_pitch
 
 
 class PurePythonResult(NamedTuple):
@@ -126,13 +134,17 @@ def rasterize_elevation_grid(
 
     steps_x = int(math.ceil((max_x - min_x) / pitch_m)) + 1
     steps_y = int(math.ceil((max_y - min_y) / pitch_m)) + 1
+    pitch_mm = pitch_m * 1000.0
+
+    if steps_x < 2 or steps_y < 2:
+        raise ValueError(f"Insufficient surface span to form a 2D grid at pitch {pitch_mm:.2f} mm.")
 
     inv_pitch = 1.0 / pitch_m
     ux = (rotated_pts_m[:, 0] - min_x) * inv_pitch
     uy = (rotated_pts_m[:, 1] - min_y) * inv_pitch
 
-    ix0 = np.clip(np.floor(ux).astype(np.int32), 0, steps_x - 2)
-    iy0 = np.clip(np.floor(uy).astype(np.int32), 0, steps_y - 2)
+    ix0 = np.clip(np.floor(ux).astype(np.int32), 0, max(0, steps_x - 2))
+    iy0 = np.clip(np.floor(uy).astype(np.int32), 0, max(0, steps_y - 2))
     fx = np.clip(ux - ix0, 0.0, 1.0)
     fy = np.clip(uy - iy0, 0.0, 1.0)
 
@@ -167,18 +179,18 @@ def rasterize_elevation_grid(
     box_area_mm2 = max(span_x_mm * span_y_mm, 1e-4)
     n_points = max(len(rotated_pts_m), 1)
     approx_spacing_mm = math.sqrt(box_area_mm2 / n_points)
-    pitch_mm = pitch_m * 1000.0
 
     if approx_spacing_mm > pitch_mm * 2.0:
         # Suggest a pitch matching approximately 0.55x to 1.0x the point spacing (rounded up to nearest 0.1mm)
         suggested_pitch = max(0.40, math.ceil(round(approx_spacing_mm * 0.55, 2) * 10.0) / 10.0)
         if suggested_pitch <= pitch_mm:
             suggested_pitch = round(pitch_mm * 2.0, 1)
-        raise ValueError(
+        raise SparseScanError(
             f"Insufficient contiguous surface area at grid_mm={pitch_mm:.2f} mm. "
             f"Average point spacing for this scan is ~{approx_spacing_mm:.2f} mm (~{n_points / box_area_mm2:.1f} pts/mm^2), "
             f"which is significantly coarser than the requested {pitch_mm:.2f} mm grid pitch (causing most raster cells to be empty). "
-            f"Re-run with a coarser pitch matching your scan density: --grid-mm {suggested_pitch:.1f}"
+            f"Re-run with a coarser pitch matching your scan density: --grid-mm {suggested_pitch:.1f}",
+            suggested_pitch=suggested_pitch,
         )
 
     # Trim only purely empty boundary rows and columns (preserving full organic shape)
@@ -256,17 +268,7 @@ def iso_gaussian_filter_1d_kernel(cutoff_m: float, pitch_m: float) -> np.ndarray
 
 def _convolve1d_constant(arr: np.ndarray, k_1d: np.ndarray, axis: int) -> np.ndarray:
     """1D convolution matching scipy.ndimage.convolve1d with mode='constant', cval=0.0."""
-    k_len = len(k_1d)
-    half = k_len // 2
-    k_rev = k_1d[::-1]
-    if axis == 1:
-        padded = np.pad(arr, ((0, 0), (half, half)), mode="constant")
-        windows = sliding_window_view(padded, k_len, axis=1)
-        return np.tensordot(windows, k_rev, axes=(-1, 0))
-    else:
-        padded = np.pad(arr, ((half, half), (0, 0)), mode="constant")
-        windows = sliding_window_view(padded, k_len, axis=0)
-        return np.tensordot(windows, k_rev, axes=(-1, 0))
+    return ndimage.convolve1d(arr, k_1d, axis=axis, mode="constant", cval=0.0)
 
 
 def _normalized_convolve_2d(arr: np.ndarray, k_1d: np.ndarray) -> np.ndarray:
@@ -402,12 +404,11 @@ def compute_heatmap_grid(
         radius_mm: Local circular evaluation radius in mm (default: 5.0 mm).
         min_support_cells: Minimum number of valid neighboring cells within radius_mm
             required to evaluate local variance (default: 12).
-        disc_averaging: If True, compute disc-averaged RMS pair variation across the
-            circular neighborhood: sqrt(2 * Var(z)). If False (default), compute
-            point-centered semivariance matching ASTM WK92969 §9.2:
-            sqrt(0.5 * [(z_i - mean_local)^2 + Var(z)]), preserving sharp point-level
-            features (peaks and pits). If None, checks the 'SVR_DISC_AVERAGING'
-            environment variable (defaulting to False).
+        disc_averaging: [Legacy] If True, compute legacy disc-averaged RMS pair variation:
+            sqrt(2 * Var(z)). If False (default / ASTM WK92969 §9.2 standard), compute
+            point-centered semivariance: sqrt(0.5 * [(z_i - mean_local)^2 + Var(z)]),
+            preserving sharp local features (peaks and pits). If None, checks the
+            'SVR_DISC_AVERAGING' environment variable (defaulting to False).
 
     Returns:
         2D float64 array of local Svr values in micrometers (µm).
@@ -440,7 +441,7 @@ def compute_heatmap_grid(
     var_local = np.maximum(0.0, (conv_z2 / np.maximum(w_local, 1e-12)) - mean_local**2)
 
     min_support = max(4.0, float(min_support_cells))
-    valid_cells = (w_local >= min_support) & finite_mask
+    valid_cells = (w_local >= (min_support - 1e-6)) & finite_mask
     heatmap_um = np.full_like(z_um, np.nan)
 
     if disc_averaging:
@@ -477,8 +478,11 @@ def interpolate_heatmap_at_points(
     fy = (v_mm - origin_y_mm) / pitch_mm
 
     h, w = hmap.shape
-    ix0 = np.clip(np.floor(fx).astype(np.int32), 0, w - 2)
-    iy0 = np.clip(np.floor(fy).astype(np.int32), 0, h - 2)
+    if h < 2 or w < 2 or len(u_mm) == 0:
+        return np.full(len(u_mm), np.nan, dtype=np.float32)
+
+    ix0 = np.clip(np.floor(fx).astype(np.int32), 0, max(0, w - 2))
+    iy0 = np.clip(np.floor(fy).astype(np.int32), 0, max(0, h - 2))
     ix1 = ix0 + 1
     iy1 = iy0 + 1
 
@@ -525,6 +529,7 @@ def analyze_pure_python(
     variogram_points: int = 10,
     variogram_span_mm: float = 0.5,
     subtract_noise: bool = True,
+    gaussian_mesh: bool = True,
 ) -> PurePythonResult:
     """Execute the complete SurfInspect ASTM WK92969 analysis in 100% pure Python."""
     raw_pts = np.asarray(points_xyz_mm, dtype=np.float64)
@@ -564,7 +569,10 @@ def analyze_pure_python(
         noise_floor_um = 0.0
 
     # Step 5: Dual-Pass ISO 16610-61 Gaussian Filtration
-    roughness_z_m = apply_dual_pass_gaussian_filter(grid_z_m, voxel_size_m, short_cutoff_m, long_cutoff_m)
+    if gaussian_mesh:
+        roughness_z_m = apply_dual_pass_gaussian_filter(grid_z_m, voxel_size_m, short_cutoff_m, long_cutoff_m)
+    else:
+        roughness_z_m = grid_z_m
 
     # Step 6: Variogram & Svr Metrology on valid points
     sa_um, sq_um, svr_raw_um, var_bins_um, var_counts = compute_variogram_and_svr(

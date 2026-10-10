@@ -44,19 +44,13 @@ def fit_plane_basis(points: npt.ArrayLike) -> PlaneFit:
 
 
 def crop_points(coords: FloatArray, config: RoughnessConfig) -> tuple[FloatArray, BoolArray]:
-    """Crop points by percentile and/or range filters."""
+    """Crop points by percentile boundary filters."""
     mask = np.ones(len(coords), dtype=bool)
-    if config.percentile_crop > 0:
+    if config.percentile_crop > 0 and len(coords) > 0:
         p = config.percentile_crop
         xlo, xhi = np.percentile(coords[:, 0], [p, 100 - p])
         ylo, yhi = np.percentile(coords[:, 1], [p, 100 - p])
         mask &= (coords[:, 0] >= xlo) & (coords[:, 0] <= xhi)
         mask &= (coords[:, 1] >= ylo) & (coords[:, 1] <= yhi)
-    if config.x_range:
-        mask &= (coords[:, 0] >= config.x_range[0]) & (coords[:, 0] <= config.x_range[1])
-    if config.y_range:
-        mask &= (coords[:, 1] >= config.y_range[0]) & (coords[:, 1] <= config.y_range[1])
-    if config.z_range:
-        mask &= (coords[:, 2] >= config.z_range[0]) & (coords[:, 2] <= config.z_range[1])
     return coords[mask], mask
 

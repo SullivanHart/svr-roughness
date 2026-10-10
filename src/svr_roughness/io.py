@@ -111,10 +111,12 @@ def load_delimited(path: str | Path) -> FloatArray:
 
 def load_obj(path: str | Path) -> FloatArray:
     vertices = []
-    for line in Path(path).read_text(encoding="utf-8", errors="replace").splitlines():
-        parts = line.strip().split()
-        if parts and parts[0] == "v" and len(parts) >= 4:
-            vertices.append((float(parts[1]), float(parts[2]), float(parts[3])))
+    with Path(path).open("r", encoding="utf-8", errors="replace") as f:
+        for line in f:
+            if line.lstrip().startswith(("v ", "v\t")):
+                parts = line.strip().split()
+                if len(parts) >= 4:
+                    vertices.append((float(parts[1]), float(parts[2]), float(parts[3])))
     if not vertices:
         raise ValueError("No OBJ vertices were found")
     return _clean_loaded_points(np.asarray(vertices, dtype=np.float64))
@@ -185,12 +187,12 @@ def _read_pcd_header(handle: BinaryIO) -> tuple[dict[str, str], int]:
 
 def _read_ascii_pcd(handle: BinaryIO, fields: list[str], points_count: int) -> FloatArray:
     xyz_indexes = _xyz_field_indexes(fields)
-    text = handle.read().decode("utf-8", errors="replace")
     rows = []
-    for line in text.splitlines():
-        if not line.strip():
+    for line in handle:
+        stripped = line.strip()
+        if not stripped or stripped.startswith(b"#"):
             continue
-        values = line.split()
+        values = stripped.split()
         rows.append([float(values[index]) for index in xyz_indexes])
         if len(rows) >= points_count:
             break
@@ -215,7 +217,12 @@ def _read_binary_pcd(
 
     dtype = np.dtype(dtype_fields)
     data = np.frombuffer(handle.read(dtype.itemsize * points_count), dtype=dtype, count=points_count)
-    return np.column_stack([data[axis].astype(np.float64).reshape(points_count) for axis in ("x", "y", "z")])
+    field_map = {f.lower(): f for f in fields}
+    try:
+        xyz_names = [field_map[axis] for axis in ("x", "y", "z")]
+    except KeyError as exc:
+        raise ValueError("The PCD file must contain x, y, and z fields") from exc
+    return np.column_stack([data[name].astype(np.float64).reshape(points_count) for name in xyz_names])
 
 
 def _xyz_field_indexes(fields: list[str]) -> list[int]:
