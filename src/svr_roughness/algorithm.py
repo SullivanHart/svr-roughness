@@ -18,6 +18,8 @@ from typing import NamedTuple
 
 import numpy as np
 from scipy import ndimage
+from scipy.fft import next_fast_len
+from scipy.spatial import ConvexHull
 
 
 class SparseScanError(ValueError):
@@ -52,6 +54,7 @@ class PurePythonResult(NamedTuple):
     abnormalities: tuple[Abnormality, ...] = ()
     svr_clean_um: float | None = None
     abnormal_mask: np.ndarray = None
+    heatmap_grid_um: np.ndarray = None
 
 
 def voxel_downsample(points_m: np.ndarray, voxel_size_m: float) -> np.ndarray:
@@ -99,17 +102,21 @@ def pca_align_plane(points_m: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.nd
     if len(centered) > 20:
         u0 = centered @ eig_vecs[:, 0]
         v0 = centered @ eig_vecs[:, 1]
+        try:
+            hull = ConvexHull(np.column_stack([u0, v0]))
+            uh = u0[hull.vertices]
+            vh = v0[hull.vertices]
+        except Exception:
+            step = max(1, len(u0) // 5000)
+            uh, vh = u0[::step], v0[::step]
+
         angles = np.linspace(0, np.pi / 2, 90)
-        min_area = float("inf")
-        best_ang = 0.0
-        for ang in angles:
-            cos_a, sin_a = np.cos(ang), np.sin(ang)
-            ru = cos_a * u0 - sin_a * v0
-            rv = sin_a * u0 + cos_a * v0
-            area = float(np.ptp(ru) * np.ptp(rv))
-            if area < min_area:
-                min_area = area
-                best_ang = float(ang)
+        cos_a = np.cos(angles)[:, None]
+        sin_a = np.sin(angles)[:, None]
+        ru = cos_a * uh[None, :] - sin_a * vh[None, :]
+        rv = sin_a * uh[None, :] + cos_a * vh[None, :]
+        areas = np.ptp(ru, axis=1) * np.ptp(rv, axis=1)
+        best_ang = float(angles[np.argmin(areas)])
 
         cos_b, sin_b = np.cos(best_ang), np.sin(best_ang)
         x_ax = cos_b * eig_vecs[:, 0] - sin_b * eig_vecs[:, 1]
@@ -159,21 +166,26 @@ def rasterize_elevation_grid(
     w01 = (1.0 - fx) * fy
     w11 = fx * fy
 
-    grid_sum_zw = np.zeros((steps_y, steps_x), dtype=np.float64)
-    grid_sum_w = np.zeros((steps_y, steps_x), dtype=np.float64)
-
+    M = steps_y * steps_x
     z = rotated_pts_m[:, 2]
-    np.add.at(grid_sum_zw, (iy0, ix0), w00 * z)
-    np.add.at(grid_sum_w, (iy0, ix0), w00)
+    idx00 = iy0 * steps_x + ix0
+    idx10 = iy0 * steps_x + (ix0 + 1)
+    idx01 = (iy0 + 1) * steps_x + ix0
+    idx11 = (iy0 + 1) * steps_x + (ix0 + 1)
 
-    np.add.at(grid_sum_zw, (iy0, ix0 + 1), w10 * z)
-    np.add.at(grid_sum_w, (iy0, ix0 + 1), w10)
+    grid_sum_w = (
+        np.bincount(idx00, weights=w00, minlength=M)
+        + np.bincount(idx10, weights=w10, minlength=M)
+        + np.bincount(idx01, weights=w01, minlength=M)
+        + np.bincount(idx11, weights=w11, minlength=M)
+    ).reshape(steps_y, steps_x)
 
-    np.add.at(grid_sum_zw, (iy0 + 1, ix0), w01 * z)
-    np.add.at(grid_sum_w, (iy0 + 1, ix0), w01)
-
-    np.add.at(grid_sum_zw, (iy0 + 1, ix0 + 1), w11 * z)
-    np.add.at(grid_sum_w, (iy0 + 1, ix0 + 1), w11)
+    grid_sum_zw = (
+        np.bincount(idx00, weights=w00 * z, minlength=M)
+        + np.bincount(idx10, weights=w10 * z, minlength=M)
+        + np.bincount(idx01, weights=w01 * z, minlength=M)
+        + np.bincount(idx11, weights=w11 * z, minlength=M)
+    ).reshape(steps_y, steps_x)
 
     valid = grid_sum_w > 1e-5
     grid_z = np.zeros((steps_y, steps_x), dtype=np.float64)
@@ -286,15 +298,14 @@ def _convolve1d_constant(arr: np.ndarray, k_1d: np.ndarray, axis: int) -> np.nda
 
 def _normalized_convolve_2d(arr: np.ndarray, k_1d: np.ndarray) -> np.ndarray:
     """Separable 2D convolution with boundary partial-kernel normalization matching cloud_viewer.cpp."""
-    ones = np.ones_like(arr)
-    # Pass 1: horizontal (X)
-    num = _convolve1d_constant(arr, k_1d, axis=1)
-    den = _convolve1d_constant(ones, k_1d, axis=1)
-    step1 = num / np.maximum(den, 1e-12)
-    # Pass 2: vertical (Y)
-    num = _convolve1d_constant(step1, k_1d, axis=0)
-    den = _convolve1d_constant(ones, k_1d, axis=0)
-    return num / np.maximum(den, 1e-12)
+    # Pass 1: horizontal (X) - 1D normalization denominator broadcasted across rows
+    den_x = _convolve1d_constant(np.ones(arr.shape[1], dtype=np.float64), k_1d, axis=0)[None, :]
+    num_x = _convolve1d_constant(arr, k_1d, axis=1)
+    step1 = num_x / np.maximum(den_x, 1e-12)
+    # Pass 2: vertical (Y) - 1D normalization denominator broadcasted across columns
+    den_y = _convolve1d_constant(np.ones(arr.shape[0], dtype=np.float64), k_1d, axis=0)[:, None]
+    num_y = _convolve1d_constant(step1, k_1d, axis=0)
+    return num_y / np.maximum(den_y, 1e-12)
 
 
 def apply_dual_pass_gaussian_filter(
@@ -328,9 +339,10 @@ def _fft_convolve2d_same(in1: np.ndarray, in2: np.ndarray) -> np.ndarray:
     s1 = in1.shape
     s2 = in2.shape
     shape = (s1[0] + s2[0] - 1, s1[1] + s2[1] - 1)
-    sp1 = np.fft.rfft2(in1, s=shape)
-    sp2 = np.fft.rfft2(in2, s=shape)
-    ret = np.fft.irfft2(sp1 * sp2, s=shape)
+    fast_shape = (next_fast_len(shape[0]), next_fast_len(shape[1]))
+    sp1 = np.fft.rfft2(in1, s=fast_shape)
+    sp2 = np.fft.rfft2(in2, s=fast_shape)
+    ret = np.fft.irfft2(sp1 * sp2, s=fast_shape)
     f0 = (s2[0] - 1) // 2
     f1 = (s2[1] - 1) // 2
     return ret[f0 : f0 + s1[0], f1 : f1 + s1[1]]
@@ -445,9 +457,22 @@ def compute_heatmap_grid(
     z_clean = np.where(finite_mask, z_um, 0.0)
     w_valid = finite_mask.astype(np.float64)
 
-    w_local = _fft_convolve2d_same(w_valid, kernel)
-    conv_z = _fft_convolve2d_same(z_clean, kernel)
-    conv_z2 = _fft_convolve2d_same(z_clean**2, kernel)
+    s1 = z_clean.shape
+    s2 = kernel.shape
+    shape = (s1[0] + s2[0] - 1, s1[1] + s2[1] - 1)
+    fast_shape = (next_fast_len(shape[0]), next_fast_len(shape[1]))
+    sp_k = np.fft.rfft2(kernel, s=fast_shape)
+    f0 = (s2[0] - 1) // 2
+    f1 = (s2[1] - 1) // 2
+
+    def _conv_k(arr: np.ndarray) -> np.ndarray:
+        sp_a = np.fft.rfft2(arr, s=fast_shape)
+        ret = np.fft.irfft2(sp_a * sp_k, s=fast_shape)
+        return ret[f0 : f0 + s1[0], f1 : f1 + s1[1]]
+
+    w_local = _conv_k(w_valid)
+    conv_z = _conv_k(z_clean)
+    conv_z2 = _conv_k(z_clean**2)
 
     # Detrended local neighborhood statistics:
     mean_local = conv_z / np.maximum(w_local, 1e-12)
@@ -708,8 +733,10 @@ def analyze_pure_python(
     abnormalities: tuple[Abnormality, ...] = ()
     svr_clean_um: float | None = None
     abnormal_mask: np.ndarray | None = None
+    heatmap_grid_um: np.ndarray | None = None
 
     if detect_abnormalities:
+        heatmap_grid_um = compute_heatmap_grid(grid_z_mm, voxel_size_mm)
         abn_list, abn_mask = detect_surface_abnormalities(
             grid_z_mm,
             voxel_size_mm,
@@ -717,6 +744,7 @@ def analyze_pure_python(
             threshold_factor=abnormality_threshold,
             min_area_mm2=min_abnormality_area_mm2,
             valid_mask=valid_mask,
+            heatmap_grid_um=heatmap_grid_um,
         )
         abnormalities = tuple(abn_list)
         abnormal_mask = abn_mask
@@ -766,5 +794,6 @@ def analyze_pure_python(
         abnormalities=abnormalities,
         svr_clean_um=svr_clean_um,
         abnormal_mask=abnormal_mask,
+        heatmap_grid_um=heatmap_grid_um,
     )
 

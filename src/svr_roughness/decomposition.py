@@ -9,7 +9,7 @@ from typing import Any
 import numpy as np
 import numpy.typing as npt
 from scipy import ndimage
-from scipy.spatial import cKDTree
+from scipy.spatial import cKDTree, ConvexHull
 
 from .algorithm import analyze_pure_python
 from .config import RoughnessConfig
@@ -26,7 +26,7 @@ class DecompositionConfig:
     plane_distance_thresh_mm: float = 1.5
     edge_margin_mm: float = 3.0  # expansion radius around curvature-flagged edge seeds
     edge_neighbor_radius_mm: float = 4.5
-    edge_neighbor_count: int = 120
+    edge_neighbor_count: int = 30
     edge_curvature_threshold: float = 0.02
     cluster_cell_mm: float = 2.0
     min_patch_points: int = 5000
@@ -221,6 +221,7 @@ def _curvature_edge_mask(
     candidates: np.ndarray,
     config: DecompositionConfig,
     tree: cKDTree,
+    boundary: np.ndarray | None = None,
 ) -> np.ndarray:
     """Flag locally non-planar points via covariance eigenvalue ratio (Bazazian 2015).
 
@@ -243,7 +244,8 @@ def _curvature_edge_mask(
     # have elevated local curvature but are valid surface data, not part edges.
     # Restricting edge seeds to the boundary zone of the face first skips
     # expensive KD-tree queries and 3x3 eigenvalue decompositions on 90-95% of points.
-    boundary = _near_face_boundary(cand_pts, config.edge_margin_mm)
+    if boundary is None:
+        boundary = _near_face_boundary(cand_pts, config.edge_margin_mm)
     if not np.any(boundary):
         return np.zeros(len(candidates), dtype=bool)
 
@@ -253,52 +255,48 @@ def _curvature_edge_mask(
     # Use full-cloud tree for neighbor lookup so edge points whose neighbors
     # span multiple faces are correctly detected as non-planar.
     k = min(config.edge_neighbor_count, len(points))
-    sub_flagged = np.zeros(len(sub_cands), dtype=bool)
 
-    for start in range(0, len(sub_cands), 4096):
-        end = min(start + 4096, len(sub_cands))
-        batch = sub_cands[start:end]
-        _, indices = tree.query(
-            points[batch], k=k,
-            distance_upper_bound=config.edge_neighbor_radius_mm,
-        )
-        if indices.ndim == 1:
-            indices = indices[:, None]
+    _, indices = tree.query(
+        points[sub_cands], k=k,
+        distance_upper_bound=config.edge_neighbor_radius_mm,
+        workers=-1,
+    )
+    if indices.ndim == 1:
+        indices = indices[:, None]
 
-        usable = indices < len(points)
-        counts = usable.sum(axis=1)
+    usable = indices < len(points)
+    counts = usable.sum(axis=1)
 
-        # Gather neighbor coordinates, masking invalid slots
-        xyz = points[np.minimum(indices, len(points) - 1)]
-        xyz = np.where(usable[..., None], xyz, 0.0)
-        mean = xyz.sum(axis=1) / np.maximum(counts[:, None], 1)
-        centered = np.where(usable[..., None], xyz - mean[:, None, :], 0.0)
+    # Gather neighbor coordinates, masking invalid slots
+    xyz = points[np.minimum(indices, len(points) - 1)]
+    xyz = np.where(usable[..., None], xyz, 0.0)
+    mean = xyz.sum(axis=1) / np.maximum(counts[:, None], 1)
+    centered = np.where(usable[..., None], xyz - mean[:, None, :], 0.0)
 
-        # Batch covariance → eigenvalues
-        covariance = np.einsum('nki,nkj->nij', centered, centered) / np.maximum(
-            counts[:, None, None], 1,
-        )
-        eigenvalues = np.linalg.eigvalsh(covariance)  # sorted ascending
-        total_var = eigenvalues.sum(axis=1)
-        sigma = eigenvalues[:, 0] / np.maximum(total_var, 1e-12)
+    # Batch covariance via BLAS matmul → eigenvalues
+    covariance = (np.swapaxes(centered, 1, 2) @ centered) / np.maximum(
+        counts[:, None, None], 1,
+    )
+    eigenvalues = np.linalg.eigvalsh(covariance)  # sorted ascending
+    total_var = eigenvalues.sum(axis=1)
+    sigma = eigenvalues[:, 0] / np.maximum(total_var, 1e-12)
 
-        # Flag: must have enough neighbors AND exceed curvature threshold
-        sub_flagged[start:end] = (counts >= 8) & (sigma > config.edge_curvature_threshold)
+    sub_flagged = (counts >= 8) & (sigma > config.edge_curvature_threshold)
 
     flagged = np.zeros(len(candidates), dtype=bool)
     flagged[boundary_sub_indices[sub_flagged]] = True
 
     # ── Expand edge margin around confirmed boundary edge seed points ──
-    # This catches the transition zone between flat face and edge/corner
-    # that individually might have borderline σ values.
+    # Only test points near the boundary margin; interior points are already far from seeds.
     if np.any(flagged) and config.edge_margin_mm > 0:
         seed_pts = cand_pts[flagged]
         seed_tree = cKDTree(seed_pts)
         distance, _ = seed_tree.query(
-            cand_pts,
+            cand_pts[boundary],
             distance_upper_bound=config.edge_margin_mm,
+            workers=-1,
         )
-        flagged |= (distance <= config.edge_margin_mm)
+        flagged[boundary] |= (distance <= config.edge_margin_mm)
 
     return flagged
 
@@ -319,7 +317,7 @@ def _stat_outlier_filter(
 
     tree = cKDTree(points)
     k = min(k_neighbors + 1, len(points))  # +1 because query includes self
-    dists, _ = tree.query(points, k=k)
+    dists, _ = tree.query(points, k=k, workers=-1)
 
     # Mean distance to K nearest neighbors (exclude self at index 0)
     mean_dists = dists[:, 1:].mean(axis=1)
@@ -381,9 +379,16 @@ def _clean_face_points(
                 signed_dist = np.dot(connected_pts, other_n) + other_d
                 adj_edge_mask |= (signed_dist > -decomp_config.edge_margin_mm)
 
-    curv_edge_mask = _curvature_edge_mask(points, connected_idx, decomp_config, edge_tree)
-    outer_edge_mask = (
+    outer_boundary = (
         _near_face_boundary(connected_pts, decomp_config.edge_margin_mm)
+        if decomp_config.edge_margin_mm > 0
+        else np.zeros(len(connected_pts), dtype=bool)
+    )
+    curv_edge_mask = _curvature_edge_mask(
+        points, connected_idx, decomp_config, edge_tree, boundary=outer_boundary
+    )
+    outer_edge_mask = (
+        outer_boundary
         if (plane_models and len(plane_models) > 1 and decomp_config.edge_margin_mm > 0)
         else np.zeros(len(connected_pts), dtype=bool)
     )
@@ -660,21 +665,26 @@ def decompose_3d_object(
         # Find minimum area bounding box dimensions in 2D
         u_proj = np.dot(diff, u_raw)
         v_proj = np.dot(diff, v_raw)
-        angles = np.linspace(0, np.pi / 2, 45)
-        best_area = float("inf")
-        best_dims = (float(np.ptp(u_proj)), float(np.ptp(v_proj)))
-        for theta in angles:
-            cos_t, sin_t = np.cos(theta), np.sin(theta)
-            rot_u = cos_t * u_proj - sin_t * v_proj
-            rot_v = sin_t * u_proj + cos_t * v_proj
-            w_u = float(np.ptp(rot_u))
-            w_v = float(np.ptp(rot_v))
-            if w_u * w_v < best_area:
-                best_area = w_u * w_v
-                best_dims = (max(w_u, w_v), min(w_u, w_v))
+        try:
+            hull = ConvexHull(np.column_stack([u_proj, v_proj]))
+            uh = u_proj[hull.vertices]
+            vh = v_proj[hull.vertices]
+        except Exception:
+            step = max(1, len(u_proj) // 5000)
+            uh, vh = u_proj[::step], v_proj[::step]
 
-        area_est = best_area
-        u_range, v_range = best_dims
+        angles = np.linspace(0, np.pi / 2, 45)
+        cos_t = np.cos(angles)[:, None]
+        sin_t = np.sin(angles)[:, None]
+        rot_u = cos_t * uh[None, :] - sin_t * vh[None, :]
+        rot_v = sin_t * uh[None, :] + cos_t * vh[None, :]
+        w_u = np.ptp(rot_u, axis=1)
+        w_v = np.ptp(rot_v, axis=1)
+        areas = w_u * w_v
+        best_idx = int(np.argmin(areas))
+        area_est = float(areas[best_idx])
+        u_range = max(float(w_u[best_idx]), float(w_v[best_idx]))
+        v_range = min(float(w_u[best_idx]), float(w_v[best_idx]))
 
         if area_est < decomp_config.min_patch_area_mm2:
             continue

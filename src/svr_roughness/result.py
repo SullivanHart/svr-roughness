@@ -56,6 +56,7 @@ class RoughnessResult:
     # ── 2D Filtered Roughness Grid & Physical Elevation Grid ──
     grid: FloatArray | None = None
     elevation_grid: FloatArray | None = None
+    heatmap_grid_um: FloatArray | None = None
     grid_pitch_mm: float = 0.20
     grid_origin_mm: FloatArray | None = None
 

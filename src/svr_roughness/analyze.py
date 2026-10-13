@@ -121,6 +121,7 @@ def analyze_points(
         abnormalities=pure_res.abnormalities,
         svr_clean_um=pure_res.svr_clean_um,
         abnormal_mask=pure_res.abnormal_mask,
+        heatmap_grid_um=pure_res.heatmap_grid_um,
     )
 
 
