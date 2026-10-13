@@ -28,6 +28,9 @@ class RoughnessConfig:
     gaussian_mesh: bool = True
     subtract_noise: bool = True
     disc_averaging: bool = False  # Legacy parameter (ASTM WK92969 §9.2 standard uses point-centered semivariance)
+    detect_abnormalities: bool = False  # ASTM WK92969 §8.7 abnormality detection & removal
+    abnormality_threshold: float = 2.0  # Threshold factor relative to global S_VR (ASTM §8.7 specifies 2.0x)
+    min_abnormality_area_mm2: float = 2.0  # Minimum connected abnormal defect area in mm² (ASTM §8.7)
 
     @classmethod
     def surfinspect_defaults(cls) -> RoughnessConfig:
@@ -81,6 +84,9 @@ def config_from_values(
     gaussian_mesh: bool = True,
     subtract_noise: bool = True,
     disc_averaging: bool = False,
+    detect_abnormalities: bool = False,
+    abnormality_threshold: float = 2.0,
+    min_abnormality_area_mm2: float = 2.0,
 ) -> RoughnessConfig:
     return RoughnessConfig(
         grid_mm=grid_mm,
@@ -95,4 +101,7 @@ def config_from_values(
         gaussian_mesh=gaussian_mesh,
         subtract_noise=subtract_noise,
         disc_averaging=disc_averaging,
+        detect_abnormalities=detect_abnormalities,
+        abnormality_threshold=abnormality_threshold,
+        min_abnormality_area_mm2=min_abnormality_area_mm2,
     )

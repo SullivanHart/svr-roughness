@@ -75,6 +75,9 @@ def analyze_points(
         variogram_span_mm=resolved.svr_span_mm,
         subtract_noise=resolved.subtract_noise,
         gaussian_mesh=resolved.gaussian_mesh,
+        detect_abnormalities=resolved.detect_abnormalities,
+        abnormality_threshold=resolved.abnormality_threshold,
+        min_abnormality_area_mm2=resolved.min_abnormality_area_mm2,
     )
 
     # ── Plane fit synchronized with grid rasterization coordinate frame ──
@@ -115,6 +118,9 @@ def analyze_points(
         variogram_bins_um=pure_res.variogram_bins_um,
         variogram_counts=pure_res.variogram_counts,
         config=resolved,
+        abnormalities=pure_res.abnormalities,
+        svr_clean_um=pure_res.svr_clean_um,
+        abnormal_mask=pure_res.abnormal_mask,
     )
 
 

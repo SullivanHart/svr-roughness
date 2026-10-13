@@ -6,6 +6,7 @@ from .algorithm import (
     SparseScanError,
     analyze_pure_python,
     compute_heatmap_grid,
+    detect_surface_abnormalities,
     interpolate_heatmap_at_points,
 )
 from .analyze import (
@@ -25,9 +26,10 @@ from .decomposition import (
     is_planar_surface,
 )
 from .io import load_delimited, load_obj, load_pcd, load_ply, load_points, load_stl_vertices
-from .result import PlaneFit, RoughnessResult, format_report, save_grid_npz, save_metrics_json
+from .result import Abnormality, PlaneFit, RoughnessResult, format_report, save_grid_npz, save_metrics_json
 
 __all__ = [
+    "Abnormality",
     "DecompositionConfig",
     "ObjectRoughnessResult",
     "PlaneFit",
@@ -43,6 +45,7 @@ __all__ = [
     "analyze_points",
     "analyze_pure_python",
     "compute_heatmap_grid",
+    "detect_surface_abnormalities",
     "interpolate_heatmap_at_points",
     "compute_roughness",
     "compute_roughness_from_ply",

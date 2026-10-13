@@ -9,12 +9,16 @@ from svr_roughness.algorithm import (
     apply_dual_pass_gaussian_filter,
     compute_heatmap_grid,
     compute_variogram_and_svr,
+    detect_surface_abnormalities,
+    interpolate_heatmap_at_points,
     iso_gaussian_filter_1d_kernel,
     pca_align_plane,
     rasterize_elevation_grid,
     voxel_downsample,
-    interpolate_heatmap_at_points,
 )
+from svr_roughness.analyze import analyze_points
+from svr_roughness.config import RoughnessConfig
+from svr_roughness.result import format_report
 from svr_roughness.io import load_points
 
 
@@ -215,6 +219,87 @@ class TestAlgorithm(unittest.TestCase):
         deg_grid = np.array([[10.0, 20.0]])
         deg_interp = interpolate_heatmap_at_points(deg_grid, 0.0, 0.0, 1.0, np.array([0.0]), np.array([0.0]))
         self.assertTrue(np.isnan(deg_interp[0]))
+
+    def test_detect_surface_abnormalities_none(self):
+        # Clean smooth grid has no abnormalities
+        grid = np.zeros((50, 50), dtype=np.float64)
+        abn, mask = detect_surface_abnormalities(grid, pitch_mm=0.2, global_svr_um=10.0)
+        self.assertEqual(len(abn), 0)
+        self.assertFalse(np.any(mask))
+
+    def test_detect_surface_abnormalities_protrusion_and_depression(self):
+        # 100x100 grid at 0.2 mm pitch = 20x20 mm
+        n = 100
+        pitch = 0.2
+        grid = np.zeros((n, n), dtype=np.float64)
+
+        # Base roughness: small noise (std ~ 0.002 mm = 2 µm)
+        rng = np.random.default_rng(123)
+        grid += rng.normal(0.0, 0.002, (n, n))
+
+        # 1. Protrusion: scab of radius 1.5 mm (d = 3.0 mm, area ~ 7.1 mm²) at (20, 20)
+        # Height +0.050 mm = +50 µm
+        y, x = np.ogrid[:n, :n]
+        dist_prot = np.sqrt(((x - 20) * pitch) ** 2 + ((y - 20) * pitch) ** 2)
+        grid[dist_prot <= 1.5] += 0.050
+
+        # 2. Depression: pit of radius 1.5 mm at (80, 80)
+        # Depth -0.050 mm = -50 µm
+        dist_dep = np.sqrt(((x - 80) * pitch) ** 2 + ((y - 80) * pitch) ** 2)
+        grid[dist_dep <= 1.5] -= 0.050
+
+        global_svr = 5.0  # µm
+        abn, mask = detect_surface_abnormalities(
+            grid,
+            pitch_mm=pitch,
+            global_svr_um=global_svr,
+            threshold_factor=2.0,
+            min_area_mm2=2.0,
+        )
+
+        self.assertEqual(len(abn), 2)
+        self.assertTrue(np.any(mask))
+
+        kinds = {a.kind for a in abn}
+        self.assertEqual(kinds, {"protrusion", "depression"})
+
+        for a in abn:
+            self.assertGreaterEqual(a.area_mm2, 2.0)
+            self.assertGreaterEqual(a.peak_deviation_um, 40.0)
+
+    def test_analyze_points_abnormality_rerun(self):
+        # 60x60 grid of 3D points
+        pitch = 0.2
+        xs = np.linspace(0, 12.0, 60)
+        ys = np.linspace(0, 12.0, 60)
+        xx, yy = np.meshgrid(xs, ys)
+        zz = np.zeros_like(xx)
+
+        # Add defect (> 2x local variance and area > 2 mm²)
+        dist_scab = np.sqrt((xx - 6.0) ** 2 + (yy - 6.0) ** 2)
+        zz[dist_scab <= 1.5] += 0.080  # 80 µm height deviation
+
+        pts = np.column_stack([xx.ravel(), yy.ravel(), zz.ravel()])
+
+        conf = RoughnessConfig(
+            grid_mm=0.2,
+            detect_abnormalities=True,
+            min_abnormality_area_mm2=2.0,
+        )
+        res = analyze_points(pts, config=conf)
+
+        self.assertGreaterEqual(len(res.abnormalities), 1)
+        self.assertIsNotNone(res.svr_clean_um)
+        # Clean S_VR excluding the defect should be strictly lower than uncorrected S_VR
+        self.assertLess(res.svr_clean_um, res.svr_um)
+        self.assertGreater(res.abnormal_area_pct, 0.0)
+        self.assertGreater(res.abnormal_frequency_per_dm2, 0.0)
+
+        # Check ASTM report contains abnormality section with correct mm and µm units
+        report = format_report(res)
+        self.assertIn("Abnormality Analysis (ASTM WK92969 §8.7 / §10.1.5.3)", report)
+        self.assertIn(f"Clean S_VR (w/o abn):      {(res.svr_clean_um / 1000.0):.4f} mm ({res.svr_clean_um:.1f} µm)", report)
+        self.assertIn(f"#{res.abnormalities[0].id}", report)
 
 
 if __name__ == "__main__":

@@ -25,6 +25,19 @@ class PlaneFit:
 
 
 @dataclass(frozen=True)
+class Abnormality:
+    """Detected surface defect cluster per ASTM WK92969 §8.7."""
+
+    id: int
+    kind: str  # "protrusion" (positive residual / scab / spatter) or "depression" (negative residual / pit / void)
+    area_mm2: float
+    diameter_mm: float
+    peak_deviation_um: float
+    centroid_uv_mm: tuple[float, float]
+    point_count: int = 0
+
+
+@dataclass(frozen=True)
 class RoughnessResult:
     """Standardized ASTM WK92969 areal surface roughness result."""
 
@@ -50,6 +63,11 @@ class RoughnessResult:
     variogram_bins_um: FloatArray | None = None
     variogram_counts: IntArray | None = None
     config: RoughnessConfig | None = None
+
+    # ── Abnormality Metrology (ASTM WK92969 §8.7 & §10.1.5.3) ──
+    abnormalities: tuple[Abnormality, ...] = ()
+    svr_clean_um: float | None = None
+    abnormal_mask: BoolArray | None = None
 
     @property
     def svr_mm(self) -> float:
@@ -93,6 +111,23 @@ class RoughnessResult:
         """Estimated average point spacing in mm."""
         density = self.point_density_pts_mm2
         return float(1.0 / np.sqrt(density)) if density > 0 else 0.0
+
+    @property
+    def abnormal_area_mm2(self) -> float:
+        """Total area of all detected abnormalities in mm²."""
+        return sum(a.area_mm2 for a in self.abnormalities) if self.abnormalities else 0.0
+
+    @property
+    def abnormal_area_pct(self) -> float:
+        """Abnormality area percentage per ASTM WK92969 §8.7.1."""
+        area = self.patch_area_mm2
+        return (self.abnormal_area_mm2 / area * 100.0) if area > 0 else 0.0
+
+    @property
+    def abnormal_frequency_per_dm2(self) -> float:
+        """Abnormality defect frequency (count per dm²) per ASTM WK92969 §8.7.1."""
+        area = self.patch_area_mm2
+        return (len(self.abnormalities) * 10000.0 / area) if area > 0 else 0.0
 
     def heatmap(self, radius_mm: float = 5.0, disc_averaging: bool | None = None) -> FloatArray:
         """Compute the 2D local Svr spatial roughness heatmap (in µm) on demand.
@@ -180,6 +215,22 @@ class RoughnessResult:
             "variogram_bins_um": [round(float(v), 4) for v in self.variogram_bins_um] if self.variogram_bins_um is not None else [],
             "variogram_counts": [int(c) for c in self.variogram_counts] if self.variogram_counts is not None else [],
             "comparators": self.comparator_equivalents(),
+            "svr_clean_um": round(self.svr_clean_um, 3) if self.svr_clean_um is not None and np.isfinite(self.svr_clean_um) else None,
+            "abnormal_area_mm2": round(self.abnormal_area_mm2, 3),
+            "abnormal_area_pct": round(self.abnormal_area_pct, 2),
+            "abnormal_frequency_per_dm2": round(self.abnormal_frequency_per_dm2, 2),
+            "abnormalities": [
+                {
+                    "id": a.id,
+                    "kind": a.kind,
+                    "area_mm2": round(a.area_mm2, 3),
+                    "diameter_mm": round(a.diameter_mm, 3),
+                    "peak_deviation_um": round(a.peak_deviation_um, 2),
+                    "centroid_uv_mm": [round(a.centroid_uv_mm[0], 2), round(a.centroid_uv_mm[1], 2)],
+                    "point_count": a.point_count,
+                }
+                for a in self.abnormalities
+            ],
         }
 
     def metrics_dict(self) -> dict[str, Any]:
@@ -328,5 +379,23 @@ def format_report(result: Any, target_svr_mm: float | None = None) -> str:
                 lines.append(f"  {lo:.3f}–{hi:.3f} mm: {value:.3f} µm ({value / 1000.0:.4f} mm){pairs_str}")
             else:
                 lines.append(f"  {lo:.3f}–{hi:.3f} mm: no pairs")
+
+    if getattr(result, "abnormalities", None) or getattr(result, "svr_clean_um", None) is not None:
+        lines.extend(
+            [
+                "",
+                "───────────────────────────────────────────────────────",
+                "  Abnormality Analysis (ASTM WK92969 §8.7 / §10.1.5.3)",
+                "───────────────────────────────────────────────────────",
+                f"  Abnormalities Detected:    {len(result.abnormalities)}",
+                f"  Clean S_VR (w/o abn):      {(result.svr_clean_um / 1000.0):.4f} mm ({result.svr_clean_um:.1f} µm)" if result.svr_clean_um is not None else "  Clean S_VR (w/o abn):      N/A",
+                f"  Total Abnormal Area:       {result.abnormal_area_mm2:.2f} mm² ({result.abnormal_area_pct:.2f}%)",
+                f"  Abnormality Frequency:     {result.abnormal_frequency_per_dm2:.2f} per dm²",
+            ]
+        )
+        for a in result.abnormalities:
+            lines.append(
+                f"    #{a.id} {a.kind.capitalize()}: area={a.area_mm2:.2f} mm², d={a.diameter_mm:.2f} mm, peak={a.peak_deviation_um:.1f} µm at ({a.centroid_uv_mm[0]:.1f}, {a.centroid_uv_mm[1]:.1f}) mm"
+            )
 
     return "\n".join(lines)

@@ -28,6 +28,9 @@ class SparseScanError(ValueError):
         self.suggested_pitch = suggested_pitch
 
 
+from .result import Abnormality
+
+
 class PurePythonResult(NamedTuple):
     sa_um: float
     sq_um: float
@@ -46,6 +49,9 @@ class PurePythonResult(NamedTuple):
     plane_normal: np.ndarray = None
     plane_x_axis: np.ndarray = None
     plane_y_axis: np.ndarray = None
+    abnormalities: tuple[Abnormality, ...] = ()
+    svr_clean_um: float | None = None
+    abnormal_mask: np.ndarray = None
 
 
 def voxel_downsample(points_m: np.ndarray, voxel_size_m: float) -> np.ndarray:
@@ -207,53 +213,60 @@ def rasterize_elevation_grid(
     origin_x = min_x + x_begin * pitch_m
     origin_y = min_y + y_begin * pitch_m
 
-    # Fill interior micro-holes for Gaussian filtration stability while strictly preserving raw_valid mask
-    filled_z = grid_z.copy()
-    if np.any(~raw_valid) and np.any(raw_valid):
-        current_valid = raw_valid.copy()
-        for _ in range(8):
-            if np.all(current_valid):
-                break
-            up = np.roll(filled_z, 1, axis=0)
-            down = np.roll(filled_z, -1, axis=0)
-            left = np.roll(filled_z, 1, axis=1)
-            right = np.roll(filled_z, -1, axis=1)
-
-            up_v = np.roll(current_valid, 1, axis=0)
-            down_v = np.roll(current_valid, -1, axis=0)
-            left_v = np.roll(current_valid, 1, axis=1)
-            right_v = np.roll(current_valid, -1, axis=1)
-
-            up_v[0, :] = False
-            down_v[-1, :] = False
-            left_v[:, 0] = False
-            right_v[:, -1] = False
-
-            sum_neighbors = (
-                np.where(up_v, up, 0.0)
-                + np.where(down_v, down, 0.0)
-                + np.where(left_v, left, 0.0)
-                + np.where(right_v, right, 0.0)
-            )
-            count_neighbors = (
-                up_v.astype(np.int32)
-                + down_v.astype(np.int32)
-                + left_v.astype(np.int32)
-                + right_v.astype(np.int32)
-            )
-
-            fill_mask = (~current_valid) & (count_neighbors > 0)
-            if not np.any(fill_mask):
-                break
-
-            filled_z[fill_mask] = sum_neighbors[fill_mask] / count_neighbors[fill_mask]
-            current_valid[fill_mask] = True
-
-        if np.any(~current_valid):
-            mean_z = np.nanmean(filled_z)
-            filled_z[~current_valid] = mean_z if np.isfinite(mean_z) else 0.0
-
+    filled_z = _fill_grid_holes(grid_z, raw_valid)
     return filled_z, raw_valid, origin_x, origin_y
+
+
+def _fill_grid_holes(grid_z: np.ndarray, valid_mask: np.ndarray) -> np.ndarray:
+    """Fill unmeasured holes iteratively for Gaussian filtration stability."""
+    filled_z = grid_z.copy()
+    if not np.any(~valid_mask) or not np.any(valid_mask):
+        return filled_z
+
+    current_valid = valid_mask.copy()
+    for _ in range(8):
+        if np.all(current_valid):
+            break
+        up = np.roll(filled_z, 1, axis=0)
+        down = np.roll(filled_z, -1, axis=0)
+        left = np.roll(filled_z, 1, axis=1)
+        right = np.roll(filled_z, -1, axis=1)
+
+        up_v = np.roll(current_valid, 1, axis=0)
+        down_v = np.roll(current_valid, -1, axis=0)
+        left_v = np.roll(current_valid, 1, axis=1)
+        right_v = np.roll(current_valid, -1, axis=1)
+
+        up_v[0, :] = False
+        down_v[-1, :] = False
+        left_v[:, 0] = False
+        right_v[:, -1] = False
+
+        sum_neighbors = (
+            np.where(up_v, up, 0.0)
+            + np.where(down_v, down, 0.0)
+            + np.where(left_v, left, 0.0)
+            + np.where(right_v, right, 0.0)
+        )
+        count_neighbors = (
+            up_v.astype(np.int32)
+            + down_v.astype(np.int32)
+            + left_v.astype(np.int32)
+            + right_v.astype(np.int32)
+        )
+
+        fill_mask = (~current_valid) & (count_neighbors > 0)
+        if not np.any(fill_mask):
+            break
+
+        filled_z[fill_mask] = sum_neighbors[fill_mask] / count_neighbors[fill_mask]
+        current_valid[fill_mask] = True
+
+    if np.any(~current_valid):
+        mean_z = np.nanmean(filled_z[valid_mask])
+        filled_z[~current_valid] = mean_z if np.isfinite(mean_z) else 0.0
+
+    return filled_z
 
 
 def iso_gaussian_filter_1d_kernel(cutoff_m: float, pitch_m: float) -> np.ndarray:
@@ -521,6 +534,101 @@ def interpolate_heatmap_at_points(
     return out.astype(np.float32)
 
 
+def detect_surface_abnormalities(
+    roughness_grid_mm: np.ndarray,
+    pitch_mm: float,
+    global_svr_um: float,
+    threshold_factor: float = 2.0,
+    min_area_mm2: float = 2.0,
+    valid_mask: np.ndarray | None = None,
+    heatmap_grid_um: np.ndarray | None = None,
+) -> tuple[list[Abnormality], np.ndarray]:
+    """Identify and segment surface abnormalities per ASTM WK92969 §8.7.
+
+    Points are defined as abnormalities if their local roughness parameter (local S_VR)
+    is >= threshold_factor * global_svr_um (default 2.0x) AND they form a connected
+    region with area >= min_area_mm2 (default 2.0 mm²).
+
+    Perimeter edge artifacts within 2 grid cells of the valid patch border are suppressed
+    via binary erosion to prevent false boundary triggers.
+
+    Returns:
+        tuple of (list of Abnormality objects, 2D boolean mask of abnormal cells).
+    """
+    if roughness_grid_mm.ndim != 2:
+        raise ValueError("Expected a 2D roughness elevation grid")
+
+    if valid_mask is None:
+        valid_mask = np.isfinite(roughness_grid_mm)
+    else:
+        valid_mask = valid_mask & np.isfinite(roughness_grid_mm)
+
+    if not np.any(valid_mask) or global_svr_um <= 0.0:
+        return [], np.zeros_like(valid_mask, dtype=bool)
+
+    if heatmap_grid_um is None:
+        heatmap_grid_um = compute_heatmap_grid(roughness_grid_mm, pitch_mm)
+
+    threshold_um = float(threshold_factor * global_svr_um)
+    candidates = valid_mask & np.isfinite(heatmap_grid_um) & (heatmap_grid_um >= threshold_um)
+
+    # Suppress perimeter edge artifacts (2 * pitch_mm margin via erosion)
+    if np.any(valid_mask):
+        eroded_boundary = ndimage.binary_erosion(valid_mask, iterations=2)
+        candidates &= eroded_boundary
+
+    if not np.any(candidates):
+        return [], np.zeros_like(valid_mask, dtype=bool)
+
+    structure = np.ones((3, 3), dtype=int)
+    labeled, num_features = ndimage.label(candidates, structure=structure)
+    if num_features == 0:
+        return [], np.zeros_like(valid_mask, dtype=bool)
+
+    cell_area_mm2 = pitch_mm * pitch_mm
+    min_cells = max(1, int(math.ceil(min_area_mm2 / cell_area_mm2)))
+    cluster_sizes = np.bincount(labeled.ravel())
+
+    abnormalities: list[Abnormality] = []
+    abnormal_mask = np.zeros_like(valid_mask, dtype=bool)
+
+    cluster_counter = 1
+    for feat_id in range(1, num_features + 1):
+        c_count = int(cluster_sizes[feat_id]) if feat_id < len(cluster_sizes) else 0
+        if c_count < min_cells:
+            continue
+
+        c_mask = (labeled == feat_id)
+        abnormal_mask |= c_mask
+
+        area_mm2 = float(c_count * cell_area_mm2)
+        diameter_mm = float(2.0 * math.sqrt(area_mm2 / math.pi))
+
+        cluster_z_vals = roughness_grid_mm[c_mask]
+        mean_z = float(np.mean(cluster_z_vals))
+        kind = "protrusion" if mean_z >= 0 else "depression"
+        peak_dev_um = float(np.max(np.abs(cluster_z_vals)) * 1000.0)
+
+        y_indices, x_indices = np.where(c_mask)
+        centroid_u = float(np.mean(x_indices) * pitch_mm)
+        centroid_v = float(np.mean(y_indices) * pitch_mm)
+
+        abnormalities.append(
+            Abnormality(
+                id=cluster_counter,
+                kind=kind,
+                area_mm2=round(area_mm2, 4),
+                diameter_mm=round(diameter_mm, 4),
+                peak_deviation_um=round(peak_dev_um, 2),
+                centroid_uv_mm=(round(centroid_u, 3), round(centroid_v, 3)),
+                point_count=c_count,
+            )
+        )
+        cluster_counter += 1
+
+    return abnormalities, abnormal_mask
+
+
 def analyze_pure_python(
     points_xyz_mm: np.ndarray,
     voxel_size_mm: float = 0.20,
@@ -530,6 +638,9 @@ def analyze_pure_python(
     variogram_span_mm: float = 0.5,
     subtract_noise: bool = True,
     gaussian_mesh: bool = True,
+    detect_abnormalities: bool = False,
+    abnormality_threshold: float = 2.0,
+    min_abnormality_area_mm2: float = 2.0,
 ) -> PurePythonResult:
     """Execute the complete SurfInspect ASTM WK92969 analysis in 100% pure Python."""
     raw_pts = np.asarray(points_xyz_mm, dtype=np.float64)
@@ -593,6 +704,47 @@ def analyze_pure_python(
     grid_z_mm = np.where(valid_mask, roughness_z_m * 1000.0, np.nan)
     elevation_grid_mm = np.where(valid_mask, grid_z_m * 1000.0, np.nan)
 
+    # Step 7: Abnormality Detection & Recalculation (ASTM WK92969 §8.7)
+    abnormalities: tuple[Abnormality, ...] = ()
+    svr_clean_um: float | None = None
+    abnormal_mask: np.ndarray | None = None
+
+    if detect_abnormalities:
+        abn_list, abn_mask = detect_surface_abnormalities(
+            grid_z_mm,
+            voxel_size_mm,
+            svr_um,
+            threshold_factor=abnormality_threshold,
+            min_area_mm2=min_abnormality_area_mm2,
+            valid_mask=valid_mask,
+        )
+        abnormalities = tuple(abn_list)
+        abnormal_mask = abn_mask
+        if abnormalities:
+            clean_valid_mask = valid_mask & ~abnormal_mask
+            if np.any(clean_valid_mask):
+                clean_grid_z_m = _fill_grid_holes(grid_z_m, clean_valid_mask)
+                if gaussian_mesh:
+                    clean_roughness_z_m = apply_dual_pass_gaussian_filter(clean_grid_z_m, voxel_size_m, short_cutoff_m, long_cutoff_m)
+                else:
+                    clean_roughness_z_m = clean_grid_z_m
+
+                _, _, clean_svr_raw_um, _, _ = compute_variogram_and_svr(
+                    clean_roughness_z_m,
+                    voxel_size_m,
+                    variogram_points,
+                    span_m,
+                    valid_mask=clean_valid_mask,
+                )
+                if subtract_noise and noise_floor_um > 0.0:
+                    svr_clean_um = float(math.sqrt(max(0.0, clean_svr_raw_um**2 - noise_floor_um**2)))
+                else:
+                    svr_clean_um = clean_svr_raw_um
+            else:
+                svr_clean_um = svr_um
+        else:
+            svr_clean_um = svr_um
+
     return PurePythonResult(
         sa_um=sa_um,
         sq_um=sq_um,
@@ -611,5 +763,8 @@ def analyze_pure_python(
         plane_normal=eig_vecs[:, 2],
         plane_x_axis=eig_vecs[:, 0],
         plane_y_axis=eig_vecs[:, 1],
+        abnormalities=abnormalities,
+        svr_clean_um=svr_clean_um,
+        abnormal_mask=abnormal_mask,
     )
 

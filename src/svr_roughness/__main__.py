@@ -54,6 +54,24 @@ def main() -> None:
         default=False,
         help="[Legacy] Use disc-averaged neighborhood variance for heatmap instead of standard point-centered semivariance",
     )
+    parser.add_argument(
+        "--detect-abnormalities",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Enable ASTM WK92969 §8.7 surface abnormality detection and removal",
+    )
+    parser.add_argument(
+        "--abnormality-threshold",
+        type=float,
+        default=2.0,
+        help="Abnormality detection threshold factor relative to global S_VR (default: 2.0 per ASTM §8.7)",
+    )
+    parser.add_argument(
+        "--min-abnormality-area-mm2",
+        type=float,
+        default=2.0,
+        help="Minimum connected abnormal area in mm² (default: 2.0 mm² per ASTM §8.7)",
+    )
     parser.add_argument("--metrics-out", type=Path, help="Path to save metrics as JSON")
     parser.add_argument("--grid-out", type=Path, help="Path to save 2D roughness grid as NPZ")
     parser.add_argument("--heatmap-out", type=Path, help="Path to save 2D Svr heatmap as NPY or NPZ")
@@ -65,6 +83,9 @@ def main() -> None:
         long_cutoff_mm=args.long_cutoff_mm,
         gaussian_mesh=args.gaussian_mesh,
         disc_averaging=bool(args.disc_averaging),
+        detect_abnormalities=bool(args.detect_abnormalities),
+        abnormality_threshold=args.abnormality_threshold,
+        min_abnormality_area_mm2=args.min_abnormality_area_mm2,
     )
 
     if args.decompose_3d:
