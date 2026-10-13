@@ -241,3 +241,22 @@ def test_stat_outlier_filter():
     few_mask = _stat_outlier_filter(few_pts, k_neighbors=6)
     assert not few_mask.any()
 
+
+def test_open_boundary_peeled_without_adjacent_plane():
+    """Verify open boundaries (e.g. table cutoffs with no adjacent plane) receive edge_margin_mm buffer."""
+    rng = np.random.default_rng(10)
+    top = _generate_synthetic_plane((0, 0, 0), (1, 0, 0), (0, 1, 0), length_u=60.0, length_v=60.0, step=0.8, rng=rng)
+    side = _generate_synthetic_plane((0, 0, 0), (1, 0, 0), (0, 0, 1), length_u=60.0, length_v=60.0, step=0.8, rng=rng)
+    l_bracket = np.vstack([top, side])
+
+    decomp_cfg = DecompositionConfig(min_patch_points=1000, edge_margin_mm=3.0)
+    res = decompose_3d_object(l_bracket, config=RoughnessConfig(grid_mm=0.5), decomp_config=decomp_cfg)
+    assert res.patch_count == 2
+    for p in res.patches:
+        assert len(p.invalid_points) > 0
+        # The clean points must not touch the very outer boundary (0 or 60)
+        pts = p.points
+        diff = pts - np.mean(pts, axis=0)
+        max_extent = np.max(np.ptp(pts, axis=0))
+        assert max_extent < 60.0  # Open perimeter margin was peeled
+

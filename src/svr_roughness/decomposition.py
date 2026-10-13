@@ -382,7 +382,12 @@ def _clean_face_points(
                 adj_edge_mask |= (signed_dist > -decomp_config.edge_margin_mm)
 
     curv_edge_mask = _curvature_edge_mask(points, connected_idx, decomp_config, edge_tree)
-    edge_mask = adj_edge_mask | curv_edge_mask
+    outer_edge_mask = (
+        _near_face_boundary(connected_pts, decomp_config.edge_margin_mm)
+        if (plane_models and len(plane_models) > 1 and decomp_config.edge_margin_mm > 0)
+        else np.zeros(len(connected_pts), dtype=bool)
+    )
+    edge_mask = adj_edge_mask | curv_edge_mask | outer_edge_mask
     clean_idx = connected_idx[~edge_mask]
     clean_pts = points[clean_idx]
 
